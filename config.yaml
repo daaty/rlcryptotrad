@@ -1,0 +1,120 @@
+# Configurações do Agente de Trading com RL + LLM
+
+# Modo de Execução
+mode: "testnet"  # Opções: "paper" (local), "testnet" (simulação), "live" (real)
+
+# Dados
+data:
+  symbol: "BTC/USDT"
+  timeframe: "15m"
+  limit: 1000  # Número de candles para baixar
+  exchange: "binance"
+  
+# Ambiente de Trading
+environment:
+  initial_balance: 10000  # USDT
+  commission: 0.0004  # 0.04% (Binance Futures maker)
+  leverage: 3  # Alavancagem máxima
+  position_size: 0.1  # 10% do saldo por trade
+  window_size: 50  # Janela de observação
+  
+# Indicadores Técnicos
+indicators:
+  - name: "rsi"
+    length: 14
+  - name: "sma"
+    length: 20
+  - name: "sma"
+    length: 50
+  - name: "bbands"
+    length: 20
+    std: 2
+  - name: "macd"
+    fast: 12
+    slow: 26
+    signal: 9
+
+# 🆕 Ensemble de Modelos RL
+ensemble:
+  enabled: true
+  algorithms: ["ppo", "td3"]  # SAC tem problemas com DirectML no Windows
+  strategy: "weighted"  # majority, weighted, confidence, best, average
+  weights:  # Pesos para strategy='weighted'
+    ppo: 0.50
+    td3: 0.50
+    
+# Treinamento RL (para cada modelo)
+training:
+  algorithm: "PPO"  # Usado quando rodar single model
+  total_timesteps: 200000  # Aumentado para melhor performance
+  learning_rate: 0.0003
+  n_steps: 2048
+  batch_size: 64
+  n_epochs: 10
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01
+
+# 🆕 Análise de Sentimento com LLM
+sentiment:
+  enabled: true
+  
+  # Coleta de Notícias
+  news:
+    sources:
+      - newsapi  # Requer NEWSAPI_KEY no .env
+      - rss  # Feeds RSS gratuitos
+    keywords:
+      - "bitcoin"
+      - "BTC"
+      - "cryptocurrency"
+      - "crypto market"
+      - "blockchain"
+    rss_feeds:
+      - "https://cointelegraph.com/rss"
+      - "https://www.coindesk.com/arc/outboundfeeds/rss/"
+      - "https://cryptonews.com/news/feed/"
+      - "https://decrypt.co/feed"
+    update_interval: 3600  # Atualiza a cada 1h
+    history_hours: 24  # Mantém últimas 24h
+  
+  # Análise com LLM
+  llm:
+    provider: "openai"  # openai, anthropic, ou local
+    model: "gpt-3.5-turbo"  # ou gpt-4, claude-3-opus, etc
+    temperature: 0.3  # Baixo = mais determinístico
+    fallback: "local"  # Usa FinBERT se API falhar
+    # api_key via .env: OPENAI_API_KEY ou ANTHROPIC_API_KEY
+  
+  # Processamento
+  processor:
+    lookback_hours: [1, 6, 24]  # Janelas temporais
+    decay_factor: 0.95  # Peso temporal (mais recente = maior)
+    min_confidence: 0.5  # Ignora análises com confiança < 50%
+  
+# Gestão de Risco
+risk_management:
+  max_leverage: 3
+  stop_loss_pct: 0.02  # 2%
+  take_profit_pct: 0.04  # 4%
+  max_drawdown: 0.15  # 15%
+  kelly_fraction: 0.25  # Fração do Kelly Criterion
+  
+# Execução
+execution:
+  mode: "paper"  # paper ou live
+  check_interval: 60  # segundos
+  use_ensemble: true  # Usa ensemble ou modelo único
+  model_path: "models/ensemble"  # Diretório dos modelos
+  
+# API Binance (usar .env para chaves sensíveis)
+binance:
+  testnet: true
+  # BINANCE_API_KEY e BINANCE_SECRET_KEY no .env
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  save_trades: true
+  save_sentiment: true
