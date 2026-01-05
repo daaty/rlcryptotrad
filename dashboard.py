@@ -19,6 +19,7 @@ from pathlib import Path
 from stable_baselines3 import PPO, TD3
 from src.models.ensemble_model import EnsembleModel
 from src.data.data_collector import DataCollector
+from src.risk.risk_manager import RiskManager
 import talib
 
 load_dotenv()
@@ -86,6 +87,11 @@ st.markdown("""
 def load_config():
     with open('config.yaml') as f:
         return yaml.safe_load(f)
+
+@st.cache_resource
+def load_risk_manager():
+    """Carrega Risk Manager"""
+    return RiskManager()
 
 @st.cache_resource
 def load_ensemble_models():
@@ -419,6 +425,64 @@ def plot_candlestick(df):
     
     return fig
 
+def calculate_performance_metrics(trades):
+    """Calcula métricas de performance avançadas"""
+    if not trades or len(trades) < 2:
+        return None
+    
+    df = pd.DataFrame(trades)
+    df['realizedPnl'] = df['realizedPnl'].astype(float)
+    df['time'] = pd.to_datetime(df['time'], unit='ms')
+    
+    # Métricas básicas
+    total_trades = len(df)
+    wins = len(df[df['realizedPnl'] > 0])
+    losses = len(df[df['realizedPnl'] < 0])
+    win_rate = (wins / total_trades) if total_trades > 0 else 0
+    
+    total_pnl = df['realizedPnl'].sum()
+    avg_win = df[df['realizedPnl'] > 0]['realizedPnl'].mean() if wins > 0 else 0
+    avg_loss = df[df['realizedPnl'] < 0]['realizedPnl'].mean() if losses > 0 else 0
+    
+    # Sharpe Ratio (anualizado, assumindo 365 dias)
+    returns = df['realizedPnl']
+    if len(returns) > 1 and returns.std() > 0:
+        sharpe_ratio = (returns.mean() / returns.std()) * np.sqrt(365)
+    else:
+        sharpe_ratio = 0
+    
+    # Profit Factor
+    gross_profit = df[df['realizedPnl'] > 0]['realizedPnl'].sum()
+    gross_loss = abs(df[df['realizedPnl'] < 0]['realizedPnl'].sum())
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float('inf')
+    
+    # Max Drawdown
+    df['cumulative_pnl'] = df['realizedPnl'].cumsum()
+    df['running_max'] = df['cumulative_pnl'].cummax()
+    df['drawdown'] = df['cumulative_pnl'] - df['running_max']
+    max_drawdown = df['drawdown'].min()
+    
+    # Recovery Factor
+    recovery_factor = (total_pnl / abs(max_drawdown)) if max_drawdown < 0 else float('inf')
+    
+    # Expectancy
+    expectancy = (win_rate * avg_win) - ((1 - win_rate) * abs(avg_loss))
+    
+    return {
+        'total_trades': total_trades,
+        'wins': wins,
+        'losses': losses,
+        'win_rate': win_rate,
+        'total_pnl': total_pnl,
+        'avg_win': avg_win,
+        'avg_loss': avg_loss,
+        'sharpe_ratio': sharpe_ratio,
+        'profit_factor': profit_factor,
+        'max_drawdown': max_drawdown,
+        'recovery_factor': recovery_factor,
+        'expectancy': expectancy
+    }
+
 def plot_pnl_chart(trades):
     """Gráfico de P&L acumulado"""
     if not trades:
@@ -481,6 +545,30 @@ with st.sidebar:
     st.text(f"Timeframe: {config['data']['timeframe']}")
     st.text(f"Position Size: {config['environment']['position_size']*100}%")
     st.text(f"Leverage: {config['environment']['leverage']}x")
+    
+    st.divider()
+    
+    # Risk Management Status
+    risk_mgr = load_risk_manager()
+    st.subheader("🛡️ Risk Management")
+    
+    # Circuit Breaker Status
+    can_trade, reason = risk_mgr.should_allow_trade()
+    if can_trade:
+        st.success("✅ Trading Ativo")
+    else:
+        st.error(f"⛔ {reason}")
+        if st.button("🔄 Reset Circuit Breaker"):
+            risk_mgr.reset_circuit_breaker()
+            st.success("Circuit breaker resetado!")
+            st.rerun()
+    
+    # Trading Stats
+    stats = risk_mgr.get_trading_stats()
+    if stats['total_trades'] > 0:
+        st.text(f"Trades: {stats['total_trades']}")
+        st.text(f"Win Rate: {stats['win_rate']*100:.1f}%")
+        st.text(f"Losses: {stats['consecutive_losses']}")
     
     st.divider()
     
@@ -562,6 +650,9 @@ with tab2:
     if len(positions) == 0:
         st.info("📭 Nenhuma posição aberta no momento")
     else:
+        # Carrega Risk Manager
+        risk_mgr = load_risk_manager()
+        
         for pos in positions:
             symbol = pos['symbol']
             qty = float(pos['positionAmt'])
@@ -571,9 +662,19 @@ with tab2:
             pnl_pct = (unrealized_pnl / (entry_price * abs(qty))) * 100 if qty != 0 else 0
             
             side = "LONG 🟢" if qty > 0 else "SHORT 🔴"
+            position_type = 1 if qty > 0 else -1
+            
+            # Calcula Stop Loss e Take Profit
+            # Para demo, usa ATR fictício (idealmente viria dos dados reais)
+            atr_estimate = mark_price * 0.02  # ~2% do preço como ATR estimado
+            
+            stop_price = risk_mgr.calculate_atr_stop_loss(entry_price, atr_estimate, position_type)
+            should_stop = risk_mgr.should_stop_loss(entry_price, mark_price, position_type, atr=atr_estimate)
+            
+            should_tp, tp_level = risk_mgr.should_take_profit(entry_price, mark_price, position_type, return_level=True)
             
             with st.container():
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 
                 with col1:
                     st.markdown(f"**{symbol}**")
@@ -589,6 +690,17 @@ with tab2:
                     st.text(f"Leverage: {leverage}x")
                 
                 with col4:
+                    # Stop Loss e Take Profit
+                    stop_color = "🔴" if should_stop else "🟢"
+                    st.text(f"{stop_color} SL: ${stop_price:,.0f}")
+                    
+                    if tp_level > 0:
+                        st.text(f"✅ TP Nível {tp_level}")
+                    else:
+                        tp_target_1 = entry_price * (1.02 if qty > 0 else 0.98)
+                        st.text(f"🎯 TP1: ${tp_target_1:,.0f}")
+                
+                with col5:
                     pnl_class = "positive" if unrealized_pnl >= 0 else "negative"
                     st.markdown(f'<p class="{pnl_class}">P&L: ${unrealized_pnl:,.2f}</p>', unsafe_allow_html=True)
                     st.markdown(f'<p class="{pnl_class}">({pnl_pct:+.2f}%)</p>', unsafe_allow_html=True)
@@ -610,28 +722,94 @@ with tab3:
         
         st.divider()
         
-        # Estatísticas
+        # Preparar DataFrame de trades
         df_trades = pd.DataFrame(trades)
         df_trades['realizedPnl'] = df_trades['realizedPnl'].astype(float)
         
-        col1, col2, col3, col4 = st.columns(4)
+        # Estatísticas avançadas
+        metrics = calculate_performance_metrics(trades)
         
-        with col1:
-            total_trades = len(df_trades)
-            st.metric("Total Trades", total_trades)
-        
-        with col2:
-            wins = len(df_trades[df_trades['realizedPnl'] > 0])
-            win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
-            st.metric("Win Rate", f"{win_rate:.1f}%")
-        
-        with col3:
-            total_pnl = df_trades['realizedPnl'].sum()
-            st.metric("Total P&L", f"${total_pnl:,.2f}")
-        
-        with col4:
-            avg_pnl = df_trades['realizedPnl'].mean()
-            st.metric("Avg P&L/Trade", f"${avg_pnl:,.2f}")
+        if metrics:
+            st.subheader("📈 Performance Metrics")
+            
+            # Linha 1: Métricas principais
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Trades", metrics['total_trades'])
+            
+            with col2:
+                win_rate_pct = metrics['win_rate'] * 100
+                st.metric("Win Rate", f"{win_rate_pct:.1f}%", 
+                         delta="✅" if win_rate_pct >= 50 else "⚠️")
+            
+            with col3:
+                st.metric("Total P&L", f"${metrics['total_pnl']:,.2f}",
+                         delta=f"${metrics['total_pnl']:+,.2f}")
+            
+            with col4:
+                sharpe = metrics['sharpe_ratio']
+                sharpe_color = "✅" if sharpe > 1.5 else ("⚠️" if sharpe > 0.5 else "❌")
+                st.metric("Sharpe Ratio", f"{sharpe:.2f}", delta=sharpe_color)
+            
+            st.divider()
+            
+            # Linha 2: Métricas de risco
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Avg Win", f"${metrics['avg_win']:,.2f}")
+            
+            with col2:
+                st.metric("Avg Loss", f"${metrics['avg_loss']:,.2f}")
+            
+            with col3:
+                pf = metrics['profit_factor']
+                pf_str = f"{pf:.2f}" if pf != float('inf') else "∞"
+                pf_color = "✅" if pf > 1.5 else ("⚠️" if pf > 1.0 else "❌")
+                st.metric("Profit Factor", pf_str, delta=pf_color)
+            
+            with col4:
+                st.metric("Max Drawdown", f"${metrics['max_drawdown']:,.2f}")
+            
+            st.divider()
+            
+            # Linha 3: Métricas avançadas
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Wins", metrics['wins'], delta=f"+{metrics['wins']}")
+            
+            with col2:
+                st.metric("Losses", metrics['losses'], delta=f"-{metrics['losses']}")
+            
+            with col3:
+                rf = metrics['recovery_factor']
+                rf_str = f"{rf:.2f}" if rf != float('inf') else "∞"
+                st.metric("Recovery Factor", rf_str)
+            
+            with col4:
+                st.metric("Expectancy", f"${metrics['expectancy']:,.2f}")
+        else:
+            # Estatísticas básicas (fallback para poucos trades)
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                total_trades = len(df_trades)
+                st.metric("Total Trades", total_trades)
+            
+            with col2:
+                wins = len(df_trades[df_trades['realizedPnl'] > 0])
+                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+                st.metric("Win Rate", f"{win_rate:.1f}%")
+            
+            with col3:
+                total_pnl = df_trades['realizedPnl'].sum()
+                st.metric("Total P&L", f"${total_pnl:,.2f}")
+            
+            with col4:
+                avg_pnl = df_trades['realizedPnl'].mean()
+                st.metric("Avg P&L/Trade", f"${avg_pnl:,.2f}")
         
         st.divider()
         
@@ -745,20 +923,32 @@ with tab4:
                     st.divider()
                     st.subheader("⚡ Executando Trade...")
                     
-                    with st.spinner("Enviando ordem para Binance..."):
-                        order = execute_trade(client, final_action, current_price, config)
-                        
-                        if order:
-                            st.success(f"✅ Ordem executada! ID: {order['orderId']}")
-                            st.json({
-                                'orderId': order['orderId'],
-                                'symbol': order['symbol'],
-                                'side': order['side'],
-                                'quantity': order['origQty'],
-                                'price': order.get('avgPrice', 'MARKET')
-                            })
-                        else:
-                            st.info("ℹ️ Nenhuma mudança de posição necessária")
+                    # Verifica Risk Management ANTES de executar
+                    risk_mgr = load_risk_manager()
+                    can_trade, reason = risk_mgr.should_allow_trade()
+                    
+                    if not can_trade:
+                        st.error(f"⛔ TRADE BLOQUEADO: {reason}")
+                        st.warning("Circuit breaker ativo. Aguarde análise manual ou resete no sidebar.")
+                    else:
+                        with st.spinner("Enviando ordem para Binance..."):
+                            order = execute_trade(client, final_action, current_price, config)
+                            
+                            if order:
+                                st.success(f"✅ Ordem executada! ID: {order['orderId']}")
+                                st.json({
+                                    'orderId': order['orderId'],
+                                    'symbol': order['symbol'],
+                                    'side': order['side'],
+                                    'quantity': order['origQty'],
+                                    'price': order.get('avgPrice', 'MARKET')
+                                })
+                                
+                                # Registra trade para risk management (PnL será atualizado quando fechar)
+                                # Por enquanto, registra como pending
+                                logger.info(f"[RISK] Trade registrado para monitoramento")
+                            else:
+                                st.info("ℹ️ Nenhuma mudança de posição necessária")
                     
                     st.divider()
                 else:

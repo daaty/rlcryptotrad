@@ -171,7 +171,13 @@ class TradingEnv(gym.Env):
     
     def _execute_action(self, action: int, current_price: float) -> float:
         """
-        Executa a ação de trading e retorna a recompensa.
+        Executa a ação de trading e retorna a recompensa APRIMORADA.
+        
+        Melhorias:
+        1. Penaliza FLAT quando há oportunidade clara
+        2. Recompensa holding de posição lucrativa
+        3. Penaliza holding de posição perdedora
+        4. Considera momentum e volatilidade
         
         Lógica:
         - action 0: Fecha posição se houver
@@ -201,7 +207,62 @@ class TradingEnv(gym.Env):
         if action_changed:
             trade_cost = self.balance * self.position_size * self.commission
             reward -= trade_cost
+        
+        # ===== NOVA LÓGICA DE REWARD =====
+        
+        # 1. Calcular indicadores de oportunidade
+        obs = self._get_observation()
+        # obs = [rsi, macd, signal, hist, upper, middle, lower, volume, close_norm, position]
+        rsi = obs[0]
+        macd_hist = obs[3]
+        
+        # 2. Detectar oportunidades claras
+        clear_buy_signal = (rsi < 0.3 and macd_hist > 0)  # RSI oversold + MACD bullish
+        clear_sell_signal = (rsi > 0.7 and macd_hist < 0)  # RSI overbought + MACD bearish
+        strong_trend = abs(macd_hist) > 0.5
+        
+        # 3. PENALIDADE POR FLAT DURANTE OPORTUNIDADE
+        if target_position == 0:  # Se está FLAT
+            if clear_buy_signal or clear_sell_signal:
+                # Penaliza por não aproveitar oportunidade clara
+                opportunity_penalty = -0.01 * self.initial_balance
+                reward += opportunity_penalty
+            elif strong_trend:
+                # Penaliza levemente por ficar de fora em tendência forte
+                trend_penalty = -0.005 * self.initial_balance
+                reward += trend_penalty
+        
+        # 4. RECOMPENSA POR HOLDING POSIÇÃO LUCRATIVA
+        elif self.position != 0:
+            unrealized_pnl = self._calculate_pnl(current_price)
             
+            if unrealized_pnl > 0:
+                # Recompensa por manter posição vencedora (scaled reward)
+                holding_reward = unrealized_pnl * 0.1  # 10% do PnL não realizado
+                reward += holding_reward
+                
+                # Bônus adicional se posição está alinhada com tendência
+                if (self.position == 1 and macd_hist > 0) or (self.position == -1 and macd_hist < 0):
+                    trend_bonus = 0.005 * self.initial_balance
+                    reward += trend_bonus
+            
+            else:
+                # PENALIDADE POR MANTER POSIÇÃO PERDEDORA
+                unrealized_loss_penalty = unrealized_pnl * 0.2  # 20% da perda não realizada (negativo)
+                reward += unrealized_loss_penalty
+                
+                # Penalidade extra se está contra a tendência
+                if (self.position == 1 and macd_hist < -0.3) or (self.position == -1 and macd_hist > 0.3):
+                    counter_trend_penalty = -0.01 * self.initial_balance
+                    reward += counter_trend_penalty
+        
+        # 5. PENALIDADE POR OVERTRADING
+        if self.trades > 0 and self.current_step > 0:
+            trade_frequency = self.trades / self.current_step
+            if trade_frequency > 0.05:  # Mais de 5% dos steps são trades
+                overtrading_penalty = -0.005 * self.initial_balance
+                reward += overtrading_penalty
+        
         return reward
     
     def _open_position(self, position_type: int, price: float):
