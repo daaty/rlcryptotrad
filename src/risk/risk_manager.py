@@ -41,6 +41,12 @@ class RiskManager:
         self.peak_equity = self.env_config['initial_balance']
         self.initial_balance = self.env_config['initial_balance']
         
+        # Circuit Breaker
+        self.consecutive_losses = 0
+        self.max_consecutive_losses = 3
+        self.circuit_breaker_active = False
+        self.last_trades = []  # Histórico recente de trades (True=win, False=loss)
+        
     def calculate_position_size(
         self,
         balance: float,
@@ -93,14 +99,57 @@ class RiskManager:
         
         return position_size
     
-    def should_stop_loss(self, entry_price: float, current_price: float, position_type: int) -> bool:
+    def calculate_atr_stop_loss(
+        self, 
+        entry_price: float, 
+        atr: float, 
+        position_type: int,
+        multiplier: float = 2.0
+    ) -> float:
+        """
+        Calcula Stop Loss dinâmico baseado em ATR (Average True Range).
+        
+        ATR mede a volatilidade do ativo. Stop Loss dinâmico se adapta:
+        - Alta volatilidade → stop mais largo
+        - Baixa volatilidade → stop mais apertado
+        
+        Args:
+            entry_price: Preço de entrada
+            atr: Average True Range do ativo
+            position_type: 1 (Long) ou -1 (Short)
+            multiplier: Multiplicador do ATR (default 2.0)
+            
+        Returns:
+            Preço do stop loss
+        """
+        stop_distance = atr * multiplier
+        
+        if position_type == 1:  # LONG
+            stop_price = entry_price - stop_distance
+        else:  # SHORT
+            stop_price = entry_price + stop_distance
+            
+        return stop_price
+    
+    def should_stop_loss(
+        self, 
+        entry_price: float, 
+        current_price: float, 
+        position_type: int,
+        atr: float = None
+    ) -> bool:
         """
         Verifica se deve acionar o Stop Loss.
+        
+        Suporta dois modos:
+        1. Stop Loss fixo (% configurado)
+        2. Stop Loss dinâmico (baseado em ATR se fornecido)
         
         Args:
             entry_price: Preço de entrada da posição
             current_price: Preço atual
             position_type: 1 (Long) ou -1 (Short)
+            atr: Average True Range (opcional, para stop dinâmico)
             
         Returns:
             True se deve fechar a posição
@@ -108,6 +157,16 @@ class RiskManager:
         if entry_price == 0:
             return False
         
+        # Se ATR fornecido, usa stop dinâmico
+        if atr is not None:
+            stop_price = self.calculate_atr_stop_loss(entry_price, atr, position_type)
+            
+            if position_type == 1:  # LONG
+                return current_price <= stop_price
+            else:  # SHORT
+                return current_price >= stop_price
+        
+        # Caso contrário, usa stop fixo (% configurado)
         price_change_pct = (current_price - entry_price) / entry_price
         
         # Long: perda se preço cai | Short: perda se preço sobe
@@ -115,19 +174,33 @@ class RiskManager:
         
         return loss_pct >= self.stop_loss_pct
     
-    def should_take_profit(self, entry_price: float, current_price: float, position_type: int) -> bool:
+    def should_take_profit(
+        self, 
+        entry_price: float, 
+        current_price: float, 
+        position_type: int,
+        return_level: bool = False
+    ) -> tuple:
         """
-        Verifica se deve acionar o Take Profit.
+        Verifica se deve acionar o Take Profit com suporte a níveis parciais.
+        
+        Estratégia:
+        - Nível 1 (50%): +2% de lucro → fecha 50% da posição
+        - Nível 2 (100%): +4% de lucro → fecha restante 50%
         
         Args:
             entry_price: Preço de entrada da posição
             current_price: Preço atual
             position_type: 1 (Long) ou -1 (Short)
+            return_level: Se True, retorna (should_tp, level), senão apenas bool
             
         Returns:
-            True se deve fechar a posição
+            Se return_level=True: (bool, int) - (deve fechar?, nível atingido)
+            Se return_level=False: bool - deve fechar posição completa?
         """
         if entry_price == 0:
+            if return_level:
+                return False, 0
             return False
         
         price_change_pct = (current_price - entry_price) / entry_price
@@ -135,7 +208,124 @@ class RiskManager:
         # Long: lucro se preço sobe | Short: lucro se preço cai
         profit_pct = price_change_pct if position_type == 1 else -price_change_pct
         
-        return profit_pct >= self.take_profit_pct
+        # Níveis de Take Profit
+        tp_level_1 = self.take_profit_pct / 2  # 50% do TP target (ex: 2%)
+        tp_level_2 = self.take_profit_pct      # 100% do TP target (ex: 4%)
+        
+        if profit_pct >= tp_level_2:
+            # Lucro atingiu 100% do target
+            if return_level:
+                return True, 2
+            return True
+        elif profit_pct >= tp_level_1:
+            # Lucro atingiu 50% do target
+            if return_level:
+                return True, 1
+            return False  # Não fecha tudo ainda
+        else:
+            if return_level:
+                return False, 0
+            return False
+    
+    def calculate_partial_close_size(
+        self,
+        current_position_size: float,
+        tp_level: int
+    ) -> float:
+        """
+        Calcula quantidade a fechar em saída parcial.
+        
+        Args:
+            current_position_size: Tamanho atual da posição
+            tp_level: Nível de TP atingido (1 ou 2)
+            
+        Returns:
+            Quantidade a fechar
+        """
+        if tp_level == 1:
+            # Nível 1: fecha 50% da posição
+            return current_position_size * 0.5
+        elif tp_level == 2:
+            # Nível 2: fecha todo o restante
+            return current_position_size
+        else:
+            return 0.0
+    
+    def record_trade_result(self, pnl: float) -> None:
+        """
+        Registra resultado de um trade para circuit breaker.
+        
+        Args:
+            pnl: Profit/Loss do trade (positivo = lucro, negativo = perda)
+        """
+        is_win = pnl > 0
+        
+        self.last_trades.append(is_win)
+        
+        # Mantém apenas últimos 100 trades
+        if len(self.last_trades) > 100:
+            self.last_trades.pop(0)
+        
+        # Atualiza contador de losses consecutivos
+        if is_win:
+            self.consecutive_losses = 0
+        else:
+            self.consecutive_losses += 1
+        
+        # Ativa circuit breaker se atingir limite
+        if self.consecutive_losses >= self.max_consecutive_losses:
+            self.circuit_breaker_active = True
+            print(f"⚠️ CIRCUIT BREAKER ATIVADO! {self.consecutive_losses} losses consecutivos")
+    
+    def should_allow_trade(self) -> Tuple[bool, str]:
+        """
+        Verifica se deve permitir novo trade (circuit breaker).
+        
+        Returns:
+            (allow, reason): True se pode tradear, False + motivo se bloqueado
+        """
+        if self.circuit_breaker_active:
+            return False, f"Circuit breaker ativo ({self.consecutive_losses} losses consecutivos)"
+        
+        return True, "OK"
+    
+    def reset_circuit_breaker(self) -> None:
+        """
+        Reseta o circuit breaker manualmente (após análise/ajustes).
+        """
+        self.consecutive_losses = 0
+        self.circuit_breaker_active = False
+        print("✅ Circuit breaker resetado")
+    
+    def get_trading_stats(self) -> Dict:
+        """
+        Retorna estatísticas de trading para análise.
+        
+        Returns:
+            Dict com métricas: win_rate, avg_win, avg_loss, etc
+        """
+        if len(self.last_trades) == 0:
+            return {
+                'total_trades': 0,
+                'wins': 0,
+                'losses': 0,
+                'win_rate': 0.0,
+                'consecutive_losses': self.consecutive_losses,
+                'circuit_breaker_active': self.circuit_breaker_active
+            }
+        
+        wins = sum(1 for t in self.last_trades if t)
+        losses = len(self.last_trades) - wins
+        win_rate = wins / len(self.last_trades) if len(self.last_trades) > 0 else 0
+        
+        return {
+            'total_trades': len(self.last_trades),
+            'wins': wins,
+            'losses': losses,
+            'win_rate': win_rate,
+            'consecutive_losses': self.consecutive_losses,
+            'circuit_breaker_active': self.circuit_breaker_active
+        }
     
     def check_drawdown(self, current_equity: float) -> Tuple[bool, float]:
         """
