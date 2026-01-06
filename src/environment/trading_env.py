@@ -89,7 +89,9 @@ class TradingEnv(gym.Env):
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
         
         # Espaço de Observações: [preços, indicadores, carteira, sentimento]
-        self.n_features = len(self.df.columns)
+        # Conta apenas colunas numéricas (exclui timestamp/strings)
+        df_numeric = self.df.select_dtypes(include=[np.number])
+        self.n_features = len(df_numeric.columns)
         obs_shape = (window_size, self.n_features + 3 + self.n_sentiment_features)
         
         self.observation_space = spaces.Box(
@@ -212,14 +214,24 @@ class TradingEnv(gym.Env):
         
         # 1. Calcular indicadores de oportunidade
         obs = self._get_observation()
-        # obs = [rsi, macd, signal, hist, upper, middle, lower, volume, close_norm, position]
-        rsi = obs[0]
-        macd_hist = obs[3]
+        # obs é (window_size, features) - pegar último timestep e flatten
+        last_obs = obs[-1] if len(obs.shape) > 1 else obs
+        
+        # Agora last_obs tem shape (features,)
+        # obs format: [price features..., rsi, macd, signal, hist, bands..., portfolio...]
+        # Para simplificar, usar índices fixos conhecidos
+        try:
+            rsi = float(last_obs[6])  # RSI_14 é coluna 6
+            macd_hist = float(last_obs[16])  # MACDh_12_26_9 é coluna 16
+        except:
+            # Fallback: sem penalidades por FLAT se não conseguir extrair indicadores
+            rsi = 0.5
+            macd_hist = 0.0
         
         # 2. Detectar oportunidades claras
-        clear_buy_signal = (rsi < 0.3 and macd_hist > 0)  # RSI oversold + MACD bullish
-        clear_sell_signal = (rsi > 0.7 and macd_hist < 0)  # RSI overbought + MACD bearish
-        strong_trend = abs(macd_hist) > 0.5
+        clear_buy_signal = (rsi < 30) and (macd_hist > 0)  # RSI oversold + MACD bullish
+        clear_sell_signal = (rsi > 70) and (macd_hist < 0)  # RSI overbought + MACD bearish
+        strong_trend = abs(macd_hist) > 0.0005  # Ajustado para escala real
         
         # 3. PENALIDADE POR FLAT DURANTE OPORTUNIDADE
         if target_position == 0:  # Se está FLAT
@@ -326,7 +338,9 @@ class TradingEnv(gym.Env):
         start = self.current_step - self.window_size
         end = self.current_step
         
-        historical_data = self.df.iloc[start:end].values
+        # Exclui coluna timestamp se existir
+        df_numeric = self.df.select_dtypes(include=[np.number])
+        historical_data = df_numeric.iloc[start:end].values
         
         # Estado da carteira (normalizado)
         portfolio_state = np.array([

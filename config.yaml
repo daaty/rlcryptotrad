@@ -7,7 +7,7 @@ mode: "testnet"  # Opções: "paper" (local), "testnet" (simulação), "live" (r
 data:
   symbol: "BTC/USDT"
   timeframe: "15m"
-  limit: 1000  # Número de candles para baixar
+  limit: 1500  # Máximo permitido pela Binance por request (mais dados = melhor aprendizado)
   exchange: "binance"
   
 # Ambiente de Trading
@@ -46,7 +46,7 @@ ensemble:
 # Treinamento RL (para cada modelo)
 training:
   algorithm: "PPO"  # Usado quando rodar single model
-  total_timesteps: 200000  # Aumentado para melhor performance
+  total_timesteps: 2000000  # 2M timesteps para modelos PROFISSIONAIS (3-5h)
   learning_rate: 0.0003
   n_steps: 2048
   batch_size: 64

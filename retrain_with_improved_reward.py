@@ -16,14 +16,19 @@ Melhorias na reward function:
 import yaml
 import torch
 import numpy as np
+import os
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
 from stable_baselines3 import PPO, TD3
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
-from src.environment.trading_env import TradingEnvironment
+from src.environment.trading_env import TradingEnv
 from src.data.data_collector import DataCollector
 from src.models.ensemble_model import EnsembleModel
+
+# Load environment variables
+load_dotenv()
 
 def load_config():
     """Carrega configuração"""
@@ -31,32 +36,26 @@ def load_config():
         return yaml.safe_load(f)
 
 def create_training_env(config):
-    """Cria ambiente de treinamento com novos dados"""
-    print("📊 Coletando dados de treinamento...")
+    """Cria ambiente de treinamento com TODOS os dados históricos salvos (6 MESES!)"""
+    print("📊 Carregando dados históricos salvos...")
     
-    collector = DataCollector(
-        api_key=config['binance']['testnet_api_key'],
-        api_secret=config['binance']['testnet_api_secret'],
-        testnet=True
-    )
+    # Usa os 6 MESES de dados históricos que já temos!
+    import pandas as pd
+    df = pd.read_csv('data/train_data_6m.csv')
     
-    # Coleta dados históricos mais recentes
-    df = collector.collect_historical_data(
-        symbol='BTCUSDT',
-        interval='15m',
-        days=90  # 3 meses de dados
-    )
+    # Converte timestamp para datetime
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
     
-    print(f"✅ Dados coletados: {len(df)} candles")
+    print(f"✅ Dados carregados: {len(df)} candles (~{len(df)*15/60/24:.0f} dias)")
+    print(f"   📅 Período: {df['timestamp'].min()} até {df['timestamp'].max()}")
     
     # Cria ambiente
-    env = TradingEnvironment(
+    env = TradingEnv(
         df=df,
-        initial_balance=config['trading']['initial_balance'],
-        position_size=config['trading']['position_size'],
-        leverage=config['trading']['leverage'],
-        commission=config['trading']['commission'],
-        render_mode=None
+        initial_balance=config['environment']['initial_balance'],
+        position_size=config['environment']['position_size'],
+        leverage=config['environment']['leverage'],
+        commission=config['environment']['commission']
     )
     
     return DummyVecEnv([lambda: env])
@@ -65,30 +64,29 @@ def train_model(model_class, env, config, model_name):
     """Treina um modelo específico"""
     print(f"\n🚀 Treinando {model_name}...")
     
-    # Device setup
+    # Device setup - try DirectML first
     device = "cpu"
-    if config['training']['use_directml']:
-        try:
-            import torch_directml
-            dml = torch_directml.device()
-            device = dml
-            print(f"✅ Usando DirectML: {torch_directml.device_name(0)}")
-        except:
-            print("⚠️ DirectML não disponível, usando CPU")
+    try:
+        import torch_directml
+        dml = torch_directml.device()
+        device = dml
+        print(f"✅ Usando DirectML: {torch_directml.device_name(0)}")
+    except:
+        print("⚠️ DirectML não disponível, usando CPU")
     
-    # Hyperparameters otimizados para novo reward
+    # Hyperparameters OTIMIZADOS para modelos TOP
     if model_name == "PPO":
         model = model_class(
             "MlpPolicy",
             env,
-            learning_rate=3e-5,  # Reduzido para aprendizado mais estável
-            n_steps=2048,
-            batch_size=128,
-            n_epochs=10,
-            gamma=0.99,
-            gae_lambda=0.95,
+            learning_rate=3e-4,  # Learning rate adaptativo
+            n_steps=4096,  # Aumentado para melhor coleta de experiência
+            batch_size=256,  # Maior batch = gradientes mais estáveis
+            n_epochs=15,  # Mais épocas por update
+            gamma=0.995,  # Maior discount = foco em recompensas futuras
+            gae_lambda=0.98,  # GAE mais alto para melhor credit assignment
             clip_range=0.2,
-            ent_coef=0.01,  # Aumentado para encorajar exploração
+            ent_coef=0.02,  # Mais exploração inicial
             vf_coef=0.5,
             max_grad_norm=0.5,
             verbose=1,
@@ -99,12 +97,12 @@ def train_model(model_class, env, config, model_name):
         model = model_class(
             "MlpPolicy",
             env,
-            learning_rate=3e-5,
-            buffer_size=100000,
-            learning_starts=1000,
-            batch_size=128,
+            learning_rate=3e-4,  # Learning rate mais alto
+            buffer_size=500000,  # Buffer MAIOR = mais experiência diversa
+            learning_starts=10000,  # Warm-up maior para buffer robusto
+            batch_size=256,  # Batch maior = updates mais estáveis
             tau=0.005,
-            gamma=0.99,
+            gamma=0.995,  # Maior discount para visão de longo prazo
             train_freq=1,
             gradient_steps=1,
             policy_delay=2,
@@ -113,21 +111,39 @@ def train_model(model_class, env, config, model_name):
             tensorboard_log=f"./logs/tensorboard_{model_name}_v2/"
         )
     
-    # Callbacks
+    # Callbacks OTIMIZADOS (mantém arquivos pequenos!)
+    # Checkpoint reduzido: só 5 checkpoints durante todo treinamento
     checkpoint_callback = CheckpointCallback(
-        save_freq=10000,
+        save_freq=400000,  # Checkpoint a cada 400k steps (5 checkpoints total)
         save_path=f'./models/checkpoints_{model_name.lower()}_v2/',
-        name_prefix=f'{model_name.lower()}_model'
+        name_prefix=f'{model_name.lower()}_model',
+        verbose=1
+    )
+    
+    # EvalCallback: Salva APENAS o MELHOR modelo baseado em performance
+    eval_env = env  # Usa mesmo env para avaliação
+    eval_callback = EvalCallback(
+        eval_env,
+        best_model_save_path=f'./models/best_{model_name.lower()}_v2/',
+        log_path=f'./logs/eval_{model_name.lower()}_v2/',
+        eval_freq=25000,  # Avalia a cada 25k steps
+        n_eval_episodes=10,
+        deterministic=True,
+        render=False,
+        verbose=1
     )
     
     # Treinamento
     total_timesteps = config['training']['total_timesteps']
     print(f"⏳ Treinando por {total_timesteps:,} timesteps...")
+    print(f"   📦 Checkpoints: 5 arquivos (~75 MB total)")
+    print(f"   🏆 Melhor modelo: salvo automaticamente (~15 MB)")
+    print(f"   💾 Espaço total estimado: ~150 MB por modelo")
+    print(f"   ⏰ Tempo estimado: {total_timesteps/200000 * 30:.0f}-{total_timesteps/200000 * 60:.0f} minutos\n")
     
     model.learn(
         total_timesteps=total_timesteps,
-        callback=checkpoint_callback,
-        progress_bar=True
+        callback=[checkpoint_callback, eval_callback]
     )
     
     # Salva modelo final
@@ -138,30 +154,24 @@ def train_model(model_class, env, config, model_name):
     return model
 
 def evaluate_models(ppo_model, td3_model, config):
-    """Avalia os modelos retreinados"""
+    """Avalia os modelos retreinados usando dados de VALIDAÇÃO"""
     print("\n📊 Avaliando modelos retreinados...")
     
-    # Cria ambiente de teste
-    collector = DataCollector(
-        api_key=config['binance']['testnet_api_key'],
-        api_secret=config['binance']['testnet_api_secret'],
-        testnet=True
-    )
+    # Usa dados de validação separados
+    import pandas as pd
+    df_test = pd.read_csv('data/val_data.csv')
     
-    # Dados de teste (último mês)
-    df_test = collector.collect_historical_data(
-        symbol='BTCUSDT',
-        interval='15m',
-        days=30
-    )
+    # Converte timestamp para datetime
+    df_test['timestamp'] = pd.to_datetime(df_test['timestamp'])
     
-    env_test = TradingEnvironment(
+    print(f"📊 Dados de teste: {len(df_test)} candles")
+    
+    env_test = TradingEnv(
         df=df_test,
-        initial_balance=config['trading']['initial_balance'],
-        position_size=config['trading']['position_size'],
-        leverage=config['trading']['leverage'],
-        commission=config['trading']['commission'],
-        render_mode=None
+        initial_balance=config['environment']['initial_balance'],
+        position_size=config['environment']['position_size'],
+        leverage=config['environment']['leverage'],
+        commission=config['environment']['commission']
     )
     
     results = {}
@@ -203,13 +213,21 @@ def create_ensemble_v2(config):
     """Cria ensemble com novos modelos"""
     print("\n🎯 Criando Ensemble v2...")
     
+    # Try DirectML
+    use_directml = False
+    try:
+        import torch_directml
+        use_directml = True
+    except:
+        pass
+    
     ensemble = EnsembleModel(
         model_paths={
             'ppo': 'models/ppo_model_v2.zip',
             'td3': 'models/td3_model_v2.zip'
         },
-        confidence_threshold=config['ensemble']['confidence_threshold'],
-        use_directml=config['training']['use_directml']
+        confidence_threshold=config['ensemble'].get('confidence_threshold', 0.7),
+        use_directml=use_directml
     )
     
     # Salva configuração do ensemble
