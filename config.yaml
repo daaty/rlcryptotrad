@@ -13,7 +13,8 @@ data:
 # Ambiente de Trading
 environment:
   initial_balance: 10000  # USDT
-  commission: 0.0004  # 0.04% (Binance Futures maker)
+  commission: 0.001  # 0.1% (Binance Futures maker/taker realista)
+  slippage: 0.0005  # 0.05% slippage médio em alta liquidez
   leverage: 3  # Alavancagem máxima
   position_size: 0.1  # 10% do saldo por trade
   window_size: 50  # Janela de observação

@@ -48,25 +48,25 @@ Transformar o sistema atual em um **agente de produção robusto** capaz de:
 **Objetivo**: Estabilizar sistema atual e adicionar proteções críticas
 
 #### 1.1 Gestão de Risco Profissional
-- [ ] **Implementar Stop Loss Dinâmico**
-  - [ ] Trailing stop baseado em ATR (Average True Range)
-  - [ ] Stop loss adapta conforme volatilidade
-  - [ ] Integrar no `risk_manager.py`
+- [x] **Implementar Stop Loss Dinâmico**
+  - [x] Trailing stop baseado em ATR (Average True Range)
+  - [x] Stop loss adapta conforme volatilidade
+  - [x] Integrar no `risk_manager.py`
   
-- [ ] **Implementar Take Profit Inteligente**
-  - [ ] TP baseado em resistências/suportes
-  - [ ] Saída parcial em níveis-chave (50% @ +2%, 50% @ +4%)
-  - [ ] Breakeven automático após +1.5%
+- [x] **Implementar Take Profit Inteligente**
+  - [x] TP baseado em resistências/suportes
+  - [x] Saída parcial em níveis-chave (50% @ +2%, 50% @ +4%)
+  - [x] Breakeven automático após +1.5%
 
-- [ ] **Kelly Criterion Real**
-  - [ ] Calcular win rate e avg win/loss dos últimos 100 trades
-  - [ ] Atualizar tamanho de posição dinamicamente
-  - [ ] Limitar máximo 20% do capital por trade
+- [x] **Kelly Criterion Real**
+  - [x] Calcular win rate e avg win/loss dos últimos 100 trades
+  - [x] Atualizar tamanho de posição dinamicamente
+  - [x] Limitar máximo 20% do capital por trade
 
-- [ ] **Circuit Breaker**
-  - [ ] Parar trading após 3 losses consecutivos
-  - [ ] Reduzir posição em 50% se drawdown > 10%
-  - [ ] Pausar operações se volatilidade > 5%
+- [x] **Circuit Breaker**
+  - [x] Parar trading após 3 losses consecutivos
+  - [x] Reduzir posição em 50% se drawdown > 10%
+  - [x] Pausar operações se volatilidade > 5%
 
 #### 1.2 Backtesting Completo
 - [ ] **Framework de Backtesting**
@@ -85,15 +85,15 @@ Transformar o sistema atual em um **agente de produção robusto** capaz de:
   - [ ] Identificar períodos problemáticos
 
 #### 1.3 Melhorar Treinamento dos Modelos
-- [ ] **Aumentar Timesteps**
-  - [ ] PPO: 500k → 1M timesteps
-  - [ ] TD3: 500k → 1M timesteps
-  - [ ] Treinar em GPU com paciência
+- [x] **Aumentar Timesteps**
+  - [x] PPO: 500k → 1M timesteps (implementado 2M)
+  - [x] TD3: 500k → 1M timesteps (implementado 2M)
+  - [x] Treinar em GPU com paciência
 
-- [ ] **Reward Function Otimizada**
-  - [ ] Penalizar inatividade excessiva (FLAT > 80% do tempo)
-  - [ ] Bonificar trades lucrativos com alto Sharpe
-  - [ ] Adicionar custo de transação real
+- [x] **Reward Function Otimizada**
+  - [x] Penalizar inatividade excessiva (FLAT > 80% do tempo)
+  - [x] Bonificar trades lucrativos com alto Sharpe
+  - [x] Adicionar custo de transação real
 
 - [ ] **Curriculum Learning**
   - [ ] Começar com dados de baixa volatilidade
@@ -106,11 +106,11 @@ Transformar o sistema atual em um **agente de produção robusto** capaz de:
   - [ ] 4 modelos: PPO + TD3 + A2C + DQN
 
 #### 1.4 Dashboard Pro
-- [ ] **Métricas Avançadas**
-  - [ ] Sharpe Ratio em tempo real
-  - [ ] Win Rate últimos 50 trades
-  - [ ] Drawdown atual vs máximo
-  - [ ] ROI diário/semanal/mensal
+- [x] **Métricas Avançadas**
+  - [x] Sharpe Ratio em tempo real
+  - [x] Win Rate últimos 50 trades
+  - [x] Drawdown atual vs máximo
+  - [x] ROI diário/semanal/mensal
 
 - [ ] **Gráficos Interativos**
   - [ ] Candlestick chart com indicadores
@@ -397,16 +397,17 @@ Transformar o sistema atual em um **agente de produção robusto** capaz de:
 ## 📋 CHECKLIST DE EXECUÇÃO
 
 ### 🔥 SPRINT 1 (1-2 semanas) - ESTABILIZAÇÃO
-- [ ] Implementar stop loss dinâmico com ATR
-- [ ] Adicionar take profit em níveis (50%/50%)
-- [ ] Circuit breaker: parar após 3 losses
-- [ ] Aumentar timesteps para 500k (PPO e TD3)
-- [ ] Melhorar reward function (penalizar FLAT)
-- [ ] Dashboard: adicionar Sharpe e Win Rate
+- [x] Implementar stop loss dinâmico com ATR
+- [x] Adicionar take profit em níveis (50%/50%)
+- [x] Circuit breaker: parar após 3 losses
+- [x] Aumentar timesteps para 500k (PPO e TD3) - **FEITO: 2M timesteps**
+- [x] Melhorar reward function (penalizar FLAT)
+- [x] Dashboard: adicionar Sharpe e Win Rate
 - [ ] Criar framework de backtesting básico
 - [ ] Validar modelos em 1 ano de dados históricos
 
 **Meta**: Sistema estável com drawdown < 15% em backtest
+**Status**: ✅ 75% COMPLETO (6/8 tarefas) - Modelos em treinamento
 
 ---
 
@@ -568,6 +569,6 @@ Este plano é **iterativo e adaptável**. Após cada sprint:
 ---
 
 **Data de Criação**: 2026-01-04  
-**Última Atualização**: 2026-01-04  
-**Status**: 🟡 PENDENTE (0% completo)  
-**Próximo Milestone**: Completar SPRINT 1 em 2 semanas
+**Última Atualização**: 2026-01-05  
+**Status**: 🟢 EM PROGRESSO (SPRINT 1: 75% completo)  
+**Próximo Milestone**: Completar treinamento dos modelos (train_overnight.py) e iniciar SPRINT 2

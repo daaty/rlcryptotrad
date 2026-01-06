@@ -33,7 +33,8 @@ class TradingEnv(gym.Env):
         data_path: str = None,
         config: Dict = None,
         initial_balance: float = 10000,
-        commission: float = 0.0004,
+        commission: float = 0.001,  # 0.1% (Binance realista: maker+taker)
+        slippage: float = 0.0005,  # 0.05% slippage médio
         leverage: int = 3,
         position_size: float = 0.1,
         window_size: int = 50,
@@ -68,12 +69,14 @@ class TradingEnv(gym.Env):
         if config:
             initial_balance = config.get('initial_balance', initial_balance)
             commission = config.get('commission', commission)
+            slippage = config.get('slippage', slippage)
             leverage = config.get('leverage', leverage)
             position_size = config.get('position_size', position_size)
             window_size = config.get('window_size', window_size)
         
         self.initial_balance = initial_balance
         self.commission = commission
+        self.slippage = slippage  # Slippage em fração (0.0005 = 0.05%)
         self.leverage = leverage
         self.position_size = position_size
         self.window_size = window_size
@@ -279,28 +282,53 @@ class TradingEnv(gym.Env):
     
     def _open_position(self, position_type: int, price: float):
         """
-        Abre uma posição Long (1) ou Short (-1).
-        """
-        self.position = position_type
-        self.entry_price = price
+        Abre uma posição aplicando slippage e fees realistas.
         
-        # Calcula o valor da posição com alavancagem
-        capital = self.balance * self.position_size
-        self.position_value = capital * self.leverage * position_type
+        Args:
+            position_type: 1 (Long) ou -1 (Short)
+            price: Preço de mercado base
+        """
+        # Aplicar slippage: Long paga mais, Short recebe menos
+        if position_type == 1:  # Long
+            execution_price = price * (1 + self.slippage)
+        else:  # Short
+            execution_price = price * (1 - self.slippage)
+        
+        self.position = position_type
+        self.entry_price = execution_price
+        
+        # Tamanho da posição em USDT
+        position_usdt = self.balance * self.position_size * self.leverage
+        
+        # Fees: cobrado sobre o valor da posição
+        fee = position_usdt * self.commission
+        self.balance -= fee  # Desconta fee do saldo
+        
+        self.position_value = position_usdt * position_type
         
     def _close_position(self, current_price: float) -> float:
         """
-        Fecha a posição atual e retorna o PnL.
+        Fecha a posição atual aplicando slippage e fees realistas.
         """
         if self.position == 0:
             return 0
         
-        pnl = self._calculate_pnl(current_price)
+        # Aplicar slippage ao fechar: Long recebe menos, Short paga mais
+        if self.position == 1:  # Long (vende)
+            execution_price = current_price * (1 - self.slippage)
+        else:  # Short (compra)
+            execution_price = current_price * (1 + self.slippage)
+        
+        # Calcular PnL com preço de execução ajustado
+        pnl = self._calculate_pnl(execution_price)
+        
+        # Cobrar fee ao fechar
+        fee = abs(self.position_value) * self.commission
+        pnl -= fee  # Desconta fee do PnL
         
         # Atualiza saldo e métricas
         self.balance += pnl
         self.total_pnl += pnl
-        self.trades += 1
         
         if pnl > 0:
             self.wins += 1
