@@ -38,7 +38,7 @@ indicators:
 # 🆕 Ensemble de Modelos RL
 ensemble:
   enabled: true
-  algorithms: ["ppo", "td3"]  # SAC tem problemas com DirectML no Windows
+  algorithms: ["ppo", "td3"]  # Ambos serão retreinados com novo reward
   strategy: "weighted"  # majority, weighted, confidence, best, average
   weights:  # Pesos para strategy='weighted'
     ppo: 0.50

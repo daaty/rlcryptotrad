@@ -16,8 +16,7 @@ from binance.client import Client
 import os
 from dotenv import load_dotenv
 from pathlib import Path
-from stable_baselines3 import PPO, TD3
-from src.models.ensemble_model import EnsembleModel
+from stable_baselines3 import TD3
 from src.data.data_collector import DataCollector
 from src.risk.risk_manager import RiskManager
 import talib
@@ -94,29 +93,17 @@ def load_risk_manager():
     return RiskManager()
 
 @st.cache_resource
-def load_ensemble_models():
-    """Carrega modelos do ensemble"""
+def load_td3_model():
+    """Carrega modelo TD3 treinado"""
     try:
-        logger.info("[MODELS] Carregando modelos ensemble...")
+        logger.info("[MODELS] Carregando modelo TD3...")
         
-        ppo = PPO.load("models/ensemble/ppo/ppo_final.zip")
-        td3 = TD3.load("models/ensemble/td3/td3_final.zip")
+        td3 = TD3.load("models/base_btcusdt_final.zip")
         
-        models = {
-            'ppo': ppo,
-            'td3': td3
-        }
-        
-        ensemble = EnsembleModel(
-            models=models,
-            strategy='weighted',
-            weights={'ppo': 0.5, 'td3': 0.5}
-        )
-        
-        logger.info("[MODELS] Modelos carregados com sucesso!")
-        return ensemble
+        logger.info("[MODELS] Modelo TD3 carregado com sucesso!")
+        return td3
     except Exception as e:
-        logger.error(f"[MODELS] Erro ao carregar modelos: {e}")
+        logger.error(f"[MODELS] Erro ao carregar modelo TD3: {e}")
         return None
 
 @st.cache_resource
@@ -187,19 +174,18 @@ def collect_market_data(client, symbol='BTCUSDT', limit=1000):
         return None
 
 def prepare_observation(market_data):
-    """Prepara observação para o modelo (50, 23)"""
+    """Prepara observação para o modelo (50, 19)"""
     try:
-        # Seleciona apenas as 20 colunas necessárias (igual ao treinamento)
+        # Seleciona apenas as 16 colunas do dataset de treino (SEM returns!)
         feature_cols = [
             'open', 'high', 'low', 'close', 'volume',
             'RSI_14', 'SMA_20', 'SMA_50',
             'BBL_20_2.0', 'BBM_20_2.0', 'BBU_20_2.0', 'BBB_20_2.0', 'BBP_20_2.0',
-            'MACD_12_26_9', 'MACDs_12_26_9', 'MACDh_12_26_9',
-            'open_return', 'high_return', 'low_return', 'close_return'
+            'MACD_12_26_9', 'MACDs_12_26_9', 'MACDh_12_26_9'
         ]
         
-        # Pega últimos 50 timesteps das 20 features
-        obs_data = market_data[feature_cols].iloc[-50:].values  # Shape: (50, 20)
+        # Pega últimos 50 timesteps das 16 features
+        obs_data = market_data[feature_cols].iloc[-50:].values  # Shape: (50, 16)
         
         logger.info(f"[OBS] Shape dos dados de mercado: {obs_data.shape}")
         
@@ -208,7 +194,7 @@ def prepare_observation(market_data):
         position_feat = np.zeros((50, 1))  # FLAT (sem posição)
         equity_feat = np.ones((50, 1)) * 1.0  # Equity = saldo
         
-        # Concatena: 20 features do mercado + 3 portfolio = 23 features totais
+        # Concatena: 16 features do mercado + 3 portfolio = 19 features totais
         obs = np.concatenate([
             obs_data,
             balance_feat,
@@ -824,7 +810,7 @@ with tab3:
 with tab4:
     st.subheader("📜 Logs em Tempo Real")
     
-    # Botão para carregar modelos e executar bot
+    # Botão para carregar modelo e executar bot
     col1, col2, col3 = st.columns([1, 1, 2])
     
     with col1:
@@ -832,14 +818,14 @@ with tab4:
             st.session_state['bot_running'] = True
             logger.info("[BOT] Bot iniciado pelo usuario")
             
-            # Carrega modelos
-            with st.spinner("Carregando modelos..."):
-                ensemble = load_ensemble_models()
-                if ensemble:
-                    st.session_state['ensemble'] = ensemble
-                    st.success("✅ Modelos carregados!")
+            # Carrega modelo TD3
+            with st.spinner("Carregando modelo TD3..."):
+                td3_model = load_td3_model()
+                if td3_model:
+                    st.session_state['td3_model'] = td3_model
+                    st.success("✅ Modelo TD3 carregado!")
                 else:
-                    st.error("❌ Erro ao carregar modelos")
+                    st.error("❌ Erro ao carregar modelo TD3")
                     st.session_state['bot_running'] = False
     
     with col2:
@@ -854,10 +840,10 @@ with tab4:
     st.divider()
     
     # Se bot está rodando, executa lógica de trading
-    if st.session_state.get('bot_running', False) and st.session_state.get('ensemble'):
+    if st.session_state.get('bot_running', False) and st.session_state.get('td3_model'):
         st.subheader("🤖 Análise em Tempo Real")
         
-        ensemble = st.session_state['ensemble']
+        td3_model = st.session_state['td3_model']
         
         with st.spinner("Coletando dados de mercado..."):
             # Coleta dados
@@ -884,40 +870,36 @@ with tab4:
                     st.info(f"✅ Observação preparada: shape {obs.shape}")
                     logger.info(f"[TRADING] Preco: ${current_price:,.2f}, RSI: {rsi:.2f}, Vol: {volatility:.4f}")
                     
-                    # Faz predição
-                    action, info = ensemble.predict(obs)
+                    # Faz predição com TD3
+                    action, _states = td3_model.predict(obs, deterministic=True)
+                    action_value = float(action[0])
                     
-                    # Mapeia ação
-                    action_map = {0: "FLAT", 1: "LONG", 2: "SHORT"}
-                    final_action = action_map[action]
+                    # Mapeia ação contínua para discreto
+                    if action_value < -0.33:
+                        final_action = "SHORT"
+                    elif action_value > 0.33:
+                        final_action = "LONG"
+                    else:
+                        final_action = "FLAT"
                     
                     # Exibe decisão
-                    st.success(f"🎯 Decisão Final: **{final_action}**")
+                    st.success(f"🎯 Decisão TD3: **{final_action}**")
                     
-                    # Detalhes dos votos
-                    col_ppo, col_td3, col_final = st.columns(3)
+                    # Detalhes da ação
+                    col_action, col_value, col_conf = st.columns(3)
                     
-                    with col_ppo:
-                        ppo_vote = action_map[info['votes']['ppo']]
-                        ppo_conf = info['confidences']['ppo'] * 100
-                        st.info(f"🤖 PPO\n\n{ppo_vote}\n\n{ppo_conf:.1f}% confiança")
+                    with col_action:
+                        st.info(f"🤖 Ação\n\n{final_action}")
                     
-                    with col_td3:
-                        td3_vote = action_map[info['votes']['td3']]
-                        td3_conf = info['confidences']['td3'] * 100
-                        st.info(f"🤖 TD3\n\n{td3_vote}\n\n{td3_conf:.1f}% confiança")
+                    with col_value:
+                        st.info(f"📊 Valor\n\n{action_value:.3f}")
                     
-                    with col_final:
-                        agreement = info['agreement'] * 100
-                        st.success(f"🎯 Final\n\n{final_action}\n\n{agreement:.1f}% acordo")
+                    with col_conf:
+                        confidence = abs(action_value) * 100
+                        st.success(f"✅ Confiança\n\n{confidence:.1f}%")
                     
                     # Log da decisão
-                    logger.info(f"[DECISION] PPO: {ppo_vote} ({ppo_conf:.1f}%), TD3: {td3_vote} ({td3_conf:.1f}%), Final: {final_action}")
-                    
-                    # Verifica se houve desempate
-                    if 'Empate detectado' in str(info):
-                        st.warning("⚖️ Desempate por confiança aplicado!")
-                        logger.info("[DECISION] Desempate por confianca aplicado")
+                    logger.info(f"[DECISION] TD3: {final_action} (action_value: {action_value:.3f})")
                     
                     # 🔥 EXECUTAR TRADE! 🔥
                     st.divider()
@@ -994,7 +976,7 @@ with tab4:
     
     with col1:
         st.success("✅ Conexão com Binance ativa")
-        st.info(f"🤖 Modelos: PPO, TD3")
+        st.info(f"🤖 Modelo: TD3")
         st.info(f"📊 Timeframe: {config['data']['timeframe']}")
     
     with col2:

@@ -76,14 +76,35 @@ class Backtester:
         }
         
     def _detect_model_type(self) -> str:
-        """Detecta tipo de modelo pelo nome do arquivo."""
+        """Detecta tipo de modelo inspecionando o arquivo."""
+        import zipfile
+        import json
+        
+        # Tenta detectar pelo nome primeiro
         name = self.model_path.stem.lower()
         if 'ppo' in name:
             return 'PPO'
         elif 'td3' in name:
             return 'TD3'
-        else:
-            return 'PPO'  # Padrão
+        
+        # Se não detectou pelo nome, inspeciona o conteúdo do .zip
+        try:
+            with zipfile.ZipFile(self.model_path, 'r') as z:
+                # Lê o arquivo data para verificar a estrutura
+                if 'data' in z.namelist():
+                    data_bytes = z.read('data')
+                    data_str = data_bytes.decode('utf-8')
+                    
+                    # Verifica características específicas do TD3
+                    if '"actor"' in data_str or '"actor_target"' in data_str or 'TD3' in data_str:
+                        return 'TD3'
+                    elif '"policy"' in data_str or 'PPO' in data_str:
+                        return 'PPO'
+        except Exception as e:
+            print(f"  Aviso: Não conseguiu detectar tipo do modelo automaticamente: {e}")
+        
+        # Padrão para modelos 'base' é TD3 (conforme train_multi_symbol.py)
+        return 'TD3'
     
     def run(self, episodes: int = 1, verbose: bool = True) -> dict:
         """

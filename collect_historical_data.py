@@ -1,290 +1,366 @@
 """
-Script para coletar 6 meses de dados históricos da Binance.
-Faz múltiplas requisições para contornar limite de 1000 candles.
+SCRIPT DE COLETA DE DADOS HISTÓRICOS PROFISSIONAL
+Coleta 1-2 anos de dados de múltiplas criptos usando CCXT
+Bypass do limite da Binance (1500 candles/request) com paginação
 """
 
-import os
+import ccxt
 import pandas as pd
+import numpy as np
 import talib
 import yaml
 from datetime import datetime, timedelta
-from binance.client import Client
-from dotenv import load_dotenv
 from pathlib import Path
+import time
 
-load_dotenv()
+class HistoricalDataCollector:
+    """Coletor profissional de dados históricos multi-symbol."""
+    
+    def __init__(self, config_path: str = "config.yaml"):
+        with open(config_path, 'r', encoding='utf-8') as f:
+            self.config = yaml.safe_load(f)
+        
+        # Inicializar CCXT (sem autenticação para dados públicos)
+        self.exchange = ccxt.binance({
+            'enableRateLimit': True,  # Respeita rate limits automático
+            'options': {'defaultType': 'future'}  # Futures por padrão
+        })
+        
+        print("✅ CCXT Binance inicializado")
+    
+    def fetch_ohlcv_historical(
+        self,
+        symbol: str,
+        timeframe: str = '15m',
+        months: int = 12,
+        max_candles: int = None
+    ) -> pd.DataFrame:
+        """
+        Coleta dados históricos com paginação automática.
+        
+        Args:
+            symbol: Par de trading (ex: 'BTC/USDT')
+            timeframe: Intervalo (1m, 5m, 15m, 1h, 4h, 1d)
+            months: Número de meses para coletar
+            max_candles: Limite máximo de candles (opcional)
+            
+        Returns:
+            DataFrame com OHLCV completo
+        """
+        print(f"\n{'='*64}")
+        print(f"COLETANDO DADOS HISTÓRICOS: {symbol}")
+        print(f"{'='*64}")
+        print(f"Timeframe: {timeframe}")
+        print(f"Período: {months} meses")
+        
+        # Calcular timestamps
+        now = datetime.now()
+        start_date = now - timedelta(days=months * 30)
+        
+        # Converter para milliseconds
+        since = int(start_date.timestamp() * 1000)
+        
+        print(f"Desde: {start_date.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Até: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Coletar em páginas
+        all_candles = []
+        page = 1
+        
+        while True:
+            try:
+                print(f"\n[Página {page}] Coletando...")
+                
+                # Fetch OHLCV
+                ohlcv = self.exchange.fetch_ohlcv(
+                    symbol,
+                    timeframe=timeframe,
+                    since=since,
+                    limit=1000  # CCXT otimiza automaticamente
+                )
+                
+                if not ohlcv or len(ohlcv) == 0:
+                    print("  Sem mais dados disponíveis")
+                    break
+                
+                # Adicionar à coleção
+                all_candles.extend(ohlcv)
+                
+                print(f"  Coletados: {len(ohlcv)} candles")
+                print(f"  Total acumulado: {len(all_candles):,}")
+                
+                # Atualizar since para próxima página
+                last_timestamp = ohlcv[-1][0]
+                since = last_timestamp + 1
+                
+                # Verificar se atingiu limite
+                if max_candles and len(all_candles) >= max_candles:
+                    print(f"  Limite atingido: {max_candles:,}")
+                    break
+                
+                # Verificar se já coletou até agora
+                last_date = datetime.fromtimestamp(last_timestamp / 1000)
+                if last_date >= now:
+                    print("  Chegou ao presente")
+                    break
+                
+                page += 1
+                
+                # Rate limiting (CCXT já faz, mas adicional para segurança)
+                time.sleep(0.5)
+                
+            except ccxt.BaseError as e:
+                print(f"  ERRO CCXT: {e}")
+                break
+            except Exception as e:
+                print(f"  ERRO: {e}")
+                break
+        
+        # Converter para DataFrame
+        df = pd.DataFrame(
+            all_candles,
+            columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        )
+        
+        # Remover duplicatas
+        df = df.drop_duplicates(subset=['timestamp'], keep='first')
+        df = df.sort_values('timestamp').reset_index(drop=True)
+        
+        # Converter timestamp
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        
+        # Converter tipos
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = df[col].astype(float)
+        
+        print(f"\n{'='*64}")
+        print(f"COLETA CONCLUÍDA: {symbol}")
+        print(f"{'='*64}")
+        print(f"Total de candles: {len(df):,}")
+        
+        # Estatísticas de período
+        first_date = df['timestamp'].iloc[0]
+        last_date = df['timestamp'].iloc[-1]
+        days = (last_date - first_date).days
+        
+        print(f"Período real: {first_date.strftime('%Y-%m-%d')} a {last_date.strftime('%Y-%m-%d')}")
+        print(f"Dias cobertos: {days} ({days/30:.1f} meses)")
+        print(f"Preço: ${df['close'].min():,.2f} - ${df['close'].max():,.2f}")
+        print(f"Última: ${df['close'].iloc[-1]:,.2f}")
+        
+        return df
+    
+    def add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Adiciona indicadores técnicos usando TA-Lib.
+        Usa mesma configuração do config.yaml para consistência.
+        """
+        print("\n🔧 Calculando indicadores técnicos...")
+        
+        df = df.set_index('timestamp')
+        df_copy = df.copy()
+        
+        # Converter para numpy arrays
+        close = df_copy['close'].values
+        high = df_copy['high'].values
+        low = df_copy['low'].values
+        
+        # Itera pelos indicadores configurados
+        for indicator in self.config['indicators']:
+            name = indicator['name']
+            
+            if name == 'rsi':
+                df_copy['RSI_14'] = talib.RSI(close, timeperiod=indicator['length'])
+                
+            elif name == 'sma':
+                df_copy[f'SMA_{indicator["length"]}'] = talib.SMA(close, timeperiod=indicator['length'])
+                
+            elif name == 'bbands':
+                upper, middle, lower = talib.BBANDS(
+                    close,
+                    timeperiod=indicator['length'],
+                    nbdevup=indicator['std'],
+                    nbdevdn=indicator['std']
+                )
+                df_copy['BBL_20_2.0'] = lower
+                df_copy['BBM_20_2.0'] = middle
+                df_copy['BBU_20_2.0'] = upper
+                df_copy['BBB_20_2.0'] = (upper - lower) / middle
+                df_copy['BBP_20_2.0'] = (close - lower) / (upper - lower)
+                
+            elif name == 'macd':
+                macd, signal, hist = talib.MACD(
+                    close,
+                    fastperiod=indicator['fast'],
+                    slowperiod=indicator['slow'],
+                    signalperiod=indicator['signal']
+                )
+                df_copy['MACD_12_26_9'] = macd
+                df_copy['MACDs_12_26_9'] = signal
+                df_copy['MACDh_12_26_9'] = hist
+        
+        # Remove NaN
+        df_copy.dropna(inplace=True)
+        df_copy = df_copy.reset_index()
+        
+        print(f"✅ {len(df_copy.columns)} features calculadas")
+        print(f"✅ {len(df_copy):,} candles após limpeza")
+        
+        return df_copy
+    
+    def collect_and_save(
+        self,
+        symbol: str,
+        months: int = 12,
+        split_ratio: float = 0.8
+    ) -> tuple:
+        """
+        Pipeline completo: coleta + indicadores + split + salvar.
+        
+        Args:
+            symbol: Par de trading
+            months: Meses de histórico
+            split_ratio: Proporção train/test (0.8 = 80/20)
+            
+        Returns:
+            (df_train, df_test, paths)
+        """
+        # 1. Coletar OHLCV
+        df = self.fetch_ohlcv_historical(
+            symbol=symbol,
+            timeframe=self.config['data']['timeframe'],
+            months=months
+        )
+        
+        if df is None or len(df) == 0:
+            raise ValueError(f"Falha ao coletar dados de {symbol}")
+        
+        # 2. Adicionar indicadores
+        df = self.add_technical_indicators(df)
+        
+        # 3. Split train/test
+        split_idx = int(len(df) * split_ratio)
+        df_train = df[:split_idx]
+        df_test = df[split_idx:]
+        
+        print(f"\n📊 Split {int(split_ratio*100)}/{int((1-split_ratio)*100)}:")
+        print(f"  Treino: {len(df_train):,} candles ({len(df_train)/96:.0f} dias)")
+        print(f"  Teste: {len(df_test):,} candles ({len(df_test)/96:.0f} dias)")
+        
+        # 4. Criar nomes de arquivos
+        symbol_clean = symbol.replace('/', '').lower()
+        timestamp = datetime.now().strftime('%Y%m%d')
+        
+        train_path = f'data/train_{symbol_clean}_{months}m_{timestamp}.csv'
+        test_path = f'data/test_{symbol_clean}_{months}m_{timestamp}.csv'
+        full_path = f'data/full_{symbol_clean}_{months}m_{timestamp}.csv'
+        
+        # 5. Salvar
+        Path('data').mkdir(exist_ok=True)
+        
+        df_train.to_csv(train_path, index=False)
+        df_test.to_csv(test_path, index=False)
+        df.to_csv(full_path, index=False)
+        
+        print(f"\n💾 Arquivos salvos:")
+        print(f"  {train_path}")
+        print(f"  {test_path}")
+        print(f"  {full_path}")
+        
+        return df_train, df_test, {
+            'train': train_path,
+            'test': test_path,
+            'full': full_path
+        }
 
 
-def fetch_historical_data(
-    symbol: str = "BTCUSDT",
-    interval: str = "15m",
-    months: int = 6,
-    testnet: bool = False
-) -> pd.DataFrame:
+def collect_multi_symbol(symbols: list, months: int = 12):
     """
-    Coleta dados históricos da Binance em múltiplas requisições.
+    Coleta dados históricos para múltiplos símbolos.
     
     Args:
-        symbol: Par de trading (ex: BTCUSDT)
-        interval: Timeframe (1m, 5m, 15m, 1h, 4h, 1d)
-        months: Número de meses para coletar
-        testnet: Se True, usa Binance Testnet
-    
-    Returns:
-        DataFrame com dados OHLCV
+        symbols: Lista de símbolos (ex: ['BTC/USDT', 'ETH/USDT'])
+        months: Meses de histórico para cada
     """
-    # Inicializa cliente
-    if testnet:
-        client = Client(
-            api_key=os.getenv('BINANCE_TESTNET_API_KEY'),
-            api_secret=os.getenv('BINANCE_TESTNET_SECRET_KEY'),
-            testnet=True
-        )
-        print(f"🧪 Coletando do Binance TESTNET")
-    else:
-        # Sem autenticação para dados públicos
-        client = Client()
-        print(f"📊 Coletando do Binance (dados públicos)")
+    collector = HistoricalDataCollector()
     
-    # Mapeamento de intervalos
-    interval_map = {
-        '1m': Client.KLINE_INTERVAL_1MINUTE,
-        '5m': Client.KLINE_INTERVAL_5MINUTE,
-        '15m': Client.KLINE_INTERVAL_15MINUTE,
-        '30m': Client.KLINE_INTERVAL_30MINUTE,
-        '1h': Client.KLINE_INTERVAL_1HOUR,
-        '4h': Client.KLINE_INTERVAL_4HOUR,
-        '1d': Client.KLINE_INTERVAL_1DAY
-    }
-    binance_interval = interval_map.get(interval, Client.KLINE_INTERVAL_15MINUTE)
+    print("\n" + "="*64)
+    print(f"COLETA MULTI-SYMBOL: {len(symbols)} moedas")
+    print("="*64)
     
-    # Calcula datas
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=months * 30)
+    results = {}
     
-    print(f"\n{'='*70}")
-    print(f"COLETANDO DADOS HISTÓRICOS")
-    print(f"{'='*70}")
-    print(f"Symbol: {symbol}")
-    print(f"Interval: {interval}")
-    print(f"Período: {start_date.strftime('%Y-%m-%d')} a {end_date.strftime('%Y-%m-%d')}")
-    print(f"Duração: {months} meses (~{months * 30} dias)")
-    print(f"{'='*70}\n")
-    
-    # Lista para armazenar DataFrames
-    all_data = []
-    
-    # Calcula quantos requests são necessários
-    # 15m: 96 candles/dia, 1000 candles = ~10.4 dias por request
-    candles_per_day = {
-        '1m': 1440,
-        '5m': 288,
-        '15m': 96,
-        '30m': 48,
-        '1h': 24,
-        '4h': 6,
-        '1d': 1
-    }
-    
-    candles_needed = candles_per_day.get(interval, 96) * months * 30
-    requests_needed = (candles_needed // 1000) + 1
-    
-    print(f"📈 Candles esperados: ~{candles_needed:,}")
-    print(f"🔄 Requests necessários: {requests_needed}")
-    print()
-    
-    # Coleta dados em blocos de 1000 candles
-    current_start = start_date
-    request_num = 0
-    
-    while current_start < end_date:
-        request_num += 1
+    for i, symbol in enumerate(symbols, 1):
+        print(f"\n[{i}/{len(symbols)}] Processando {symbol}...")
         
         try:
-            # Converte para timestamp em millisegundos
-            start_ts = int(current_start.timestamp() * 1000)
-            
-            print(f"Request {request_num}/{requests_needed}: {current_start.strftime('%Y-%m-%d %H:%M')}...", end=" ")
-            
-            # Faz requisição
-            klines = client.futures_klines(
+            df_train, df_test, paths = collector.collect_and_save(
                 symbol=symbol,
-                interval=binance_interval,
-                startTime=start_ts,
-                limit=1000
+                months=months
             )
             
-            if not klines:
-                print("❌ Sem dados")
-                break
+            results[symbol] = {
+                'success': True,
+                'train_size': len(df_train),
+                'test_size': len(df_test),
+                'paths': paths
+            }
             
-            # Converte para DataFrame
-            df_chunk = pd.DataFrame(
-                klines,
-                columns=['open_time', 'open', 'high', 'low', 'close', 'volume',
-                        'close_time', 'quote_volume', 'trades', 'taker_buy_base',
-                        'taker_buy_quote', 'ignore']
-            )
+            print(f"✅ {symbol} concluído")
             
-            # Seleciona colunas
-            df_chunk = df_chunk[['open_time', 'open', 'high', 'low', 'close', 'volume']]
-            df_chunk.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-            
-            # Converte tipos
-            df_chunk['timestamp'] = pd.to_datetime(df_chunk['timestamp'], unit='ms')
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-                df_chunk[col] = df_chunk[col].astype(float)
-            
-            all_data.append(df_chunk)
-            
-            print(f"✅ {len(df_chunk)} candles")
-            
-            # Atualiza data inicial para próxima requisição
-            current_start = df_chunk['timestamp'].iloc[-1]
-            
-            # Evita rate limit
-            import time
-            time.sleep(0.2)
-            
+            # Rate limiting entre símbolos
+            if i < len(symbols):
+                print("\n⏳ Aguardando 2 segundos...")
+                time.sleep(2)
+                
         except Exception as e:
-            print(f"❌ Erro: {e}")
-            break
+            print(f"❌ ERRO em {symbol}: {e}")
+            results[symbol] = {
+                'success': False,
+                'error': str(e)
+            }
     
-    # Concatena todos os DataFrames
-    if not all_data:
-        raise ValueError("Nenhum dado foi coletado!")
+    # Resumo final
+    print("\n" + "="*64)
+    print("RESUMO DA COLETA")
+    print("="*64)
     
-    df_final = pd.concat(all_data, ignore_index=True)
+    for symbol, result in results.items():
+        if result['success']:
+            print(f"✅ {symbol}: {result['train_size']:,} train / {result['test_size']:,} test")
+        else:
+            print(f"❌ {symbol}: {result['error']}")
     
-    # Remove duplicatas
-    df_final = df_final.drop_duplicates(subset='timestamp', keep='first')
-    df_final = df_final.sort_values('timestamp').reset_index(drop=True)
-    
-    print(f"\n{'='*70}")
-    print(f"✅ COLETA CONCLUÍDA!")
-    print(f"{'='*70}")
-    print(f"Total de candles: {len(df_final):,}")
-    print(f"Período real: {df_final['timestamp'].iloc[0]} a {df_final['timestamp'].iloc[-1]}")
-    print(f"Duração: {df_final['timestamp'].iloc[-1] - df_final['timestamp'].iloc[0]}")
-    print(f"{'='*70}\n")
-    
-    return df_final
-
-
-def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Adiciona indicadores técnicos usando TA-Lib.
-    """
-    print("🔧 Calculando indicadores técnicos...")
-    
-    df = df.copy()
-    
-    # RSI
-    df['RSI_14'] = talib.RSI(df['close'], timeperiod=14)
-    
-    # SMAs
-    df['SMA_20'] = talib.SMA(df['close'], timeperiod=20)
-    df['SMA_50'] = talib.SMA(df['close'], timeperiod=50)
-    
-    # Bollinger Bands
-    upper, middle, lower = talib.BBANDS(df['close'], timeperiod=20, nbdevup=2, nbdevdn=2)
-    df['BBL_20_2.0'] = lower
-    df['BBM_20_2.0'] = middle
-    df['BBU_20_2.0'] = upper
-    df['BBB_20_2.0'] = (upper - lower) / middle
-    df['BBP_20_2.0'] = (df['close'] - lower) / (upper - lower)
-    
-    # MACD
-    macd, macdsignal, macdhist = talib.MACD(df['close'], fastperiod=12, slowperiod=26, signalperiod=9)
-    df['MACD_12_26_9'] = macd
-    df['MACDs_12_26_9'] = macdsignal
-    df['MACDh_12_26_9'] = macdhist
-    
-    # Returns
-    df['open_return'] = df['open'].pct_change()
-    df['high_return'] = df['high'].pct_change()
-    df['low_return'] = df['low'].pct_change()
-    df['close_return'] = df['close'].pct_change()
-    
-    # Remove NaN inicial
-    df = df.dropna().reset_index(drop=True)
-    
-    # Normaliza indicadores para [0, 1]
-    indicators_to_normalize = [
-        'RSI_14', 'SMA_20', 'SMA_50', 'BBL_20_2.0', 'BBM_20_2.0', 
-        'BBU_20_2.0', 'BBB_20_2.0', 'BBP_20_2.0', 'MACD_12_26_9', 
-        'MACDs_12_26_9', 'MACDh_12_26_9'
-    ]
-    
-    for col in indicators_to_normalize:
-        if col in df.columns:
-            min_val = df[col].min()
-            max_val = df[col].max()
-            if max_val != min_val:
-                df[col] = (df[col] - min_val) / (max_val - min_val)
-            else:
-                df[col] = 0.0
-    
-    print(f"✅ Indicadores calculados: {len([c for c in df.columns if c not in ['timestamp', 'open', 'high', 'low', 'close', 'volume']])} features")
-    
-    return df
-
-
-def main():
-    """Função principal"""
-    
-    # Parâmetros
-    symbol = "BTCUSDT"
-    interval = "15m"
-    months = 6
-    testnet = False  # True para testnet, False para dados públicos
-    
-    # Coleta dados
-    df = fetch_historical_data(symbol, interval, months, testnet)
-    
-    # Adiciona indicadores
-    df = add_technical_indicators(df)
-    
-    # Análise dos dados
-    print("\n📊 ANÁLISE DOS DADOS:")
-    print(f"   Shape: {df.shape}")
-    print(f"   Colunas: {list(df.columns)}")
-    print(f"\n💰 Estatísticas do Close:")
-    print(f"   Min: ${df['close'].min():,.2f}")
-    print(f"   Max: ${df['close'].max():,.2f}")
-    print(f"   Média: ${df['close'].mean():,.2f}")
-    print(f"   Range: ${df['close'].max() - df['close'].min():,.2f} ({((df['close'].max() / df['close'].min()) - 1) * 100:.1f}%)")
-    
-    returns = df['close'].pct_change()
-    print(f"\n📈 Volatilidade:")
-    print(f"   Std: {returns.std() * 100:.4f}%")
-    print(f"   Max drawdown: {returns.min() * 100:.2f}%")
-    print(f"   Max pump: {returns.max() * 100:.2f}%")
-    
-    # Salva dados
-    output_dir = Path("data")
-    output_dir.mkdir(exist_ok=True)
-    
-    output_path = output_dir / "train_data_6m.csv"
-    df.to_csv(output_path, index=False)
-    
-    print(f"\n✅ Dados salvos em: {output_path}")
-    print(f"   Tamanho: {output_path.stat().st_size / 1024 / 1024:.2f} MB")
-    
-    # Backup do arquivo antigo
-    old_file = output_dir / "train_data.csv"
-    if old_file.exists():
-        backup_file = output_dir / "train_data_backup.csv"
-        old_file.rename(backup_file)
-        print(f"   Backup do arquivo antigo: {backup_file}")
-        
-        # Copia novo para train_data.csv
-        import shutil
-        shutil.copy(output_path, old_file)
-        print(f"   Novo arquivo copiado para: {old_file}")
-    
-    print("\n🎯 Próximo passo: Execute 'python -m src.training.ensemble_trainer' para retreinar os modelos")
+    return results
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    
+    # Argumentos: python collect_historical_data.py [symbol] [months]
+    # Exemplo: python collect_historical_data.py BTC/USDT 12
+    
+    if len(sys.argv) > 1:
+        # Modo single symbol
+        symbol = sys.argv[1]
+        months = int(sys.argv[2]) if len(sys.argv) > 2 else 12
+        
+        collector = HistoricalDataCollector()
+        collector.collect_and_save(symbol=symbol, months=months)
+    
+    else:
+        # Modo multi-symbol padrão
+        symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
+        months = 12  # 1 ano
+        
+        print("\n🚀 COLETA AUTOMÁTICA MULTI-SYMBOL")
+        print(f"Símbolos: {', '.join(symbols)}")
+        print(f"Período: {months} meses cada")
+        print("\nPressione CTRL+C para cancelar...\n")
+        
+        time.sleep(3)
+        
+        results = collect_multi_symbol(symbols, months=months)
+        
+        print("\n✅ COLETA COMPLETA!")
+        print("Próximo passo: python train_multi_symbol.py")
