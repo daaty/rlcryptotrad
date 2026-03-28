@@ -1,423 +1,335 @@
-# 🤖 Agente de Trading: Ensemble RL + LLM
+# 🤖 Trading Bot Dashboard — LSTM V17.7
 
-Sistema avançado de trading automatizado combinando **3 algoritmos de Reinforcement Learning** com **análise de sentimento via LLM** para operar futuros de criptomoedas na Binance.
-
-## ✨ Novidades v2.0
-
-### 🆕 **Ensemble de Modelos RL**
-- **PPO** (Proximal Policy Optimization) - Conservador e estável
-- **SAC** (Soft Actor-Critic) - Agressivo, ideal para trading contínuo
-- **TD3** (Twin Delayed DDPG) - Ações contínuas com menor ruído
-- **Votação inteligente** combinando previsões dos 3 modelos
-
-### 🧠 **Análise de Sentimento com LLM**
-- Coleta automática de notícias (NewsAPI + RSS feeds)
-- Análise de sentimento via **GPT-4/GPT-3.5**, **Claude** ou **FinBERT** (local)
-- Features temporais (1h, 6h, 24h) com decay
-- Detecta tendências e volatilidade de sentimento
-
-### 📊 **Sistema Completo**
-- **9+ features de sentimento** integradas ao agente
-- **32+ features totais** (mercado + sentimento + portfolio)
-- **Gestão de risco** avançada com Kelly Criterion
-- **Paper e Live trading** com monitoramento 24/7
+> Automated Binance Futures trading bot powered by a **RecurrentPPO (LSTM)** model trained with Stable-Baselines3. Built on a modular Streamlit dashboard with real-time WebSocket data, multi-symbol support, and professional risk management.
 
 ---
 
-## 🚀 Quick Start
+## 📋 Table of Contents
 
-### 1️⃣ **Instalação**
+1. [Features](#features)
+2. [Architecture](#architecture)
+3. [Requirements](#requirements)
+4. [Installation](#installation)
+5. [Configuration](#configuration)
+6. [Running the Bot](#running-the-bot)
+7. [File Structure](#file-structure)
+8. [Risk Management](#risk-management)
+9. [Docker](#docker)
+10. [Authentication](#authentication)
+11. [Telegram Notifications](#telegram-notifications)
+12. [FAQ & Troubleshooting](#faq--troubleshooting)
 
-```powershell
-# Clone e navegue
-git clone <seu-repositorio>
-cd AGENTE_TRANDING
+---
 
-# Ambiente virtual
+## Features
+
+| Feature | Details |
+|---|---|
+| **Model** | RecurrentPPO (LSTM) — V17.7, 600k steps |
+| **Exchange** | Binance Futures (Testnet + Live) |
+| **Symbols** | Multi-symbol (BTC, ETH, SOL, …) |
+| **Timeframe** | 15-minute candles via WebSocket |
+| **Position sizing** | Kelly Criterion (adaptive, based on trade history) |
+| **Risk guards** | SL/TP, Trailing Stop, ATR-based SL, breakeven after TP1 |
+| **Dashboard** | 5-tab Streamlit (Overview, Positions, Performance, Analysis, Engine) |
+| **State persistence** | Engine state saved to disk — survives restarts |
+| **Notifications** | Telegram alerts for SL/TP/drawdown/WS issues |
+| **Paper mode** | Simulate trades without sending real orders |
+| **Auth** | Optional Streamlit login gate (bcrypt hashed passwords) |
+| **Logging** | Rotating file logs (10 MB, 7-day retention) |
+| **Tests** | 37 unit tests — pytest |
+
+---
+
+## Architecture
+
+```
+dashboard_new.py              ← Streamlit entry point
+│
+├── dashboard/
+│   ├── core/
+│   │   ├── logging_setup.py  ← RotatingFileHandler + deque for UI
+│   │   └── config.py         ← YAML config loader
+│   │
+│   ├── data/
+│   │   ├── websocket_manager.py ← Real-time candle buffers (WS + REST fallback)
+│   │   └── account_data.py      ← Balance & positions (WS-first)
+│   │
+│   ├── trading/
+│   │   ├── engine.py          ← Main loop: inference → filters → execute
+│   │   ├── executor.py        ← Order placement (Binance API + paper mode)
+│   │   ├── entry_filter.py    ← RSI / EMA / Volume / ATR quality filters
+│   │   ├── observation.py     ← Feature extraction for LSTM input
+│   │   └── state_persistence.py ← Save/restore state to data/engine_state.json
+│   │
+│   ├── analytics/
+│   │   ├── performance.py     ← Sharpe, sortino, drawdown, win-rate
+│   │   ├── risk_calculator.py ← Kelly Criterion position sizing
+│   │   ├── correlation.py     ← Pearson cross-symbol correlation guard
+│   │   └── report_generator.py ← PDF performance reports (fpdf2)
+│   │
+│   ├── integrations/
+│   │   └── telegram_notifier.py ← Async Telegram bot (queue + worker thread)
+│   │
+│   └── ui/
+│       ├── sidebar.py
+│       ├── tab_overview.py
+│       ├── tab_positions.py
+│       ├── tab_performance.py  ← PDF download button
+│       ├── tab_analysis.py
+│       └── tab_engine.py       ← Start/stop, decisions, config editor, logs
+│
+├── src/trading/advanced_risk.py ← TrailingStopManager (ATR trailing, breakeven)
+├── config.yaml                  ← Central configuration
+├── auth_config.yaml             ← Dashboard login credentials (bcrypt)
+├── Dockerfile                   ← Production container
+└── docker-compose.yml           ← Multi-service orchestration
+```
+
+---
+
+## Requirements
+
+- **Python 3.11** (3.10+ should work)
+- **Binance API key** (Testnet or Live — Futures enabled)
+- **TA-Lib** C library (see [Installation](#installation))
+- **CUDA / DirectML** optional (CPU inference works fine)
+
+---
+
+## Installation
+
+### 1. Clone and set up virtual environment
+
+```bash
+git clone <your-repo-url>
+cd "AGENTE TRANDING"
 python -m venv venv
-.\venv\Scripts\Activate.ps1
 
-# Instale dependências
+# Windows
+venv\Scripts\activate
+
+# Linux / macOS
+source venv/bin/activate
+```
+
+### 2. Install TA-Lib C library
+
+**Windows:** Download the pre-built wheel from [here](https://github.com/cgohlke/talib-build/releases) and install:
+```bash
+pip install TA_Lib-0.4.x-cpXX-cpXX-win_amd64.whl
+```
+
+**Ubuntu / Debian:**
+```bash
+sudo apt-get install build-essential wget
+wget https://sourceforge.net/projects/ta-lib/files/ta-lib/0.4.0/ta-lib-0.4.0-src.tar.gz
+tar -xzf ta-lib-0.4.0-src.tar.gz && cd ta-lib
+./configure --prefix=/usr && make -j$(nproc) && sudo make install
+pip install TA-Lib
+```
+
+### 3. Install Python dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 2️⃣ **Configuração**
+### 4. Set up API credentials
 
-```powershell
-# Copie template de variáveis
+```bash
 cp .env.example .env
-
-# Edite .env com suas API keys:
-# - BINANCE_API_KEY (obrigatório)
-# - OPENAI_API_KEY (recomendado para LLM)
-# - NEWSAPI_KEY (opcional, 500 requests/dia grátis)
+# Edit .env with your Binance API key and secret
 ```
 
-### 3️⃣ **Teste o Sistema**
+### 5. Verify installation
 
-```powershell
-# Verifica se tudo está OK
-python test_system.py
-
-# Deve mostrar:
-# ✅ Imports OK
-# ✅ config.yaml OK
-# ✅ Environment OK
-# ✅ Notícias coletadas
-```
-
-### 4️⃣ **Treinamento**
-
-```powershell
-# Coleta dados históricos
-python -m src.data.data_collector
-
-# Treina ensemble (PPO + SAC + TD3)
-python -m src.training.ensemble_trainer
-
-# Aguarde ~30-60min
-# Modelos salvos em: models/ensemble/
-```
-
-### 5️⃣ **Trading**
-
-```powershell
-# Paper trading (SEM RISCO)
-python -m src.execution.ensemble_executor
-
-# Output:
-# 📰 Sentimento: 0.654 (23 notícias)
-# 🤖 Votos: {'ppo': 1, 'sac': 1, 'td3': 0}
-#    Ação Final: 1 (Long)
-#    Concordância: 66.7%
-# 💵 Preço: $94,523.45
-# ✅ Ação executada
-```
-
-**⚠️ IMPORTANTE:** Use primeiro a testnet da Binance para testes!
-
----
-
-## 📚 Documentação Completa
-
-- **[GUIA_ENSEMBLE_LLM.md](GUIA_ENSEMBLE_LLM.md)** - Guia completo de uso (RECOMENDADO)
-- **[ARQUITETURA_TECNICA.md](ARQUITETURA_TECNICA.md)** - Detalhes técnicos da arquitetura
-- **[COMPARACAO_FREQTRADE.md](COMPARACAO_FREQTRADE.md)** - Comparação com Freqtrade
-- **[INTEGRACAO_FREQTRADE.md](INTEGRACAO_FREQTRADE.md)** - Como integrar com Freqtrade
-
----
-
-## 🎯 Features Principais
-
-### **1. Ensemble de RL** 🤖🤖🤖
-```python
-# 3 modelos votam em cada decisão
-PPO: Long (confiança: 70%)
-SAC: Long (confiança: 90%)  
-TD3: Flat (confiança: 60%)
-→ Resultado: Long (consenso ponderado)
-```
-
-**Estratégias de votação:**
-- `majority` - Votação simples
-- `weighted` - Ponderado por performance (padrão)
-- `confidence` - Ponderado por certeza
-- `best` - Usa apenas melhor modelo
-- `average` - Média das previsões
-
-### **2. Análise de Sentimento** 🧠
-```python
-# Pipeline completo
-Notícias → LLM (GPT/Claude/FinBERT) → Features
-↓
-sentiment_1h: 0.8 (bullish)
-sentiment_6h: 0.6 (bullish)
-sentiment_24h: 0.3 (neutral)
-trend: +0.5 (melhorando)
-volatility: 0.2 (baixa)
-```
-
-**Fontes:**
-- NewsAPI (500 requests/dia grátis)
-- RSS Feeds (CoinTelegraph, CoinDesk, etc)
-- Atualizações a cada 1h
-
-**Modelos LLM:**
-- OpenAI GPT-3.5/GPT-4 (pago, melhor qualidade)
-- Anthropic Claude (alternativa)
-- FinBERT local (grátis, offline)
-
-### **3. Gestão de Risco** 🛡️
-```python
-✅ Kelly Criterion para position sizing
-✅ Stop Loss automático (2%)
-✅ Take Profit automático (4%)
-✅ Max Drawdown protection (15%)
-✅ Validação antes de cada trade
+```bash
+python -m pytest tests/ -v        # All 37 tests should pass
+streamlit run dashboard_new.py    # Opens at http://localhost:8501
 ```
 
 ---
 
-## 🏗️ Arquitetura
+## Configuration
 
-```
-┌─────────────────────────────────────────────┐
-│          Coleta de Dados                    │
-├─────────────────────────────────────────────┤
-│ Binance API → OHLCV + Indicadores           │
-│ NewsAPI/RSS → Notícias → LLM → Sentimento  │
-└─────────────────┬───────────────────────────┘
-                  ↓
-┌─────────────────────────────────────────────┐
-│          Trading Environment                 │
-├─────────────────────────────────────────────┤
-│ Observation: [Market + Sentiment + Portfolio]│
-│ Actions: [Flat, Long, Short]                │
-│ Reward: PnL - Costs - Penalties            │
-└─────────────────┬───────────────────────────┘
-                  ↓
-┌─────────────────────────────────────────────┐
-│          Ensemble RL                        │
-├─────────────────────────────────────────────┤
-│ PPO Model → Vote 1                          │
-│ SAC Model → Vote 2  → Combiner → Action    │
-│ TD3 Model → Vote 3                          │
-└─────────────────┬───────────────────────────┘
-                  ↓
-┌─────────────────────────────────────────────┐
-│          Risk Management                     │
-├─────────────────────────────────────────────┤
-│ Validate Stop Loss / Take Profit            │
-│ Check Max Drawdown                          │
-│ Calculate Position Size (Kelly)            │
-└─────────────────┬───────────────────────────┘
-                  ↓
-┌─────────────────────────────────────────────┐
-│          Execution                          │
-├─────────────────────────────────────────────┤
-│ Paper Trading / Live Trading (Binance)     │
-│ Logging & Metrics                          │
-└─────────────────────────────────────────────┘
+All settings are in `config.yaml`. Key sections:
+
+### Trading Mode
+
+```yaml
+mode: "testnet"   # "paper" | "testnet" | "live"
 ```
 
----
+| Mode | Description |
+|---|---|
+| `paper` | Simulated fills, no API calls — safest for testing |
+| `testnet` | Real API calls on Binance Testnet (fake money) |
+| `live` | **Real money** — only after thorough testing |
 
-## 📂 Estrutura do Projeto
+### Risk Management
 
+```yaml
+risk_management:
+  stop_loss_pct: 0.02             # 2% fixed SL fallback
+  take_profit_pct: 0.04           # 4% TP total (TP1 at 50%, TP2 at 100%)
+  trailing_stop_activation: 0.03  # Activate trailing at +3%
+  trailing_stop_distance: 0.015   # Trailing distance 1.5%
+  max_total_exposure: 0.60        # Max 60% of equity in open positions
+  max_exposure_per_asset: 0.25    # Max 25% per symbol
 ```
-AGENTE_TRANDING/
-├── src/
-│   ├── data/
-│   │   └── data_collector.py         # Coleta OHLCV + indicadores
-│   ├── environment/
-│   │   └── trading_env.py            # Gymnasium environment
-│   ├── sentiment/                     # 🆕 Análise de sentimento
-│   │   ├── news_collector.py         # Coleta notícias
-│   │   ├── llm_analyzer.py           # GPT/Claude/FinBERT
-│   │   └── sentiment_processor.py    # Features numéricas
-│   ├── models/                        # 🆕 Ensemble
-│   │   └── ensemble_model.py         # Votação de modelos
-│   ├── training/
-│   │   ├── train.py                  # Treina modelo único
-│   │   └── ensemble_trainer.py       # 🆕 Treina PPO+SAC+TD3
-│   ├── risk/
-│   │   └── risk_manager.py           # Kelly, SL, TP
-│   └── execution/
-│       ├── executor.py               # Executor simples
-│       └── ensemble_executor.py      # 🆕 Executor completo
-├── data/                              # Dados históricos
-├── models/                            # Modelos treinados
-│   └── ensemble/                     # 🆕 PPO, SAC, TD3
-├── logs/                              # Logs e métricas
-├── config.yaml                        # Configuração principal
-├── .env.example                       # Template de credenciais
-├── requirements.txt                   # Dependências
-├── test_system.py                     # 🆕 Teste completo
-├── README.md                          # Este arquivo
-├── GUIA_ENSEMBLE_LLM.md              # 🆕 Guia de uso
-├── ARQUITETURA_TECNICA.md            # 🆕 Docs técnicas
-└── COMPARACAO_FREQTRADE.md           # Comparação
 
-🆕 = Novos arquivos v2.0
+Live-edit from the dashboard: **⚙️ Engine → ⚙️ Parâmetros de Risco**.
+
+### Symbols
+
+```yaml
+data:
+  primary_symbol: "BTC/USDT"
+  symbols:
+    - "BTC/USDT"
+    - "ETH/USDT"
+    - "SOL/USDT"
 ```
 
 ---
 
-## 🚀 Uso
+## Running the Bot
 
-### Fase 1: Coletar Dados
-
-```bash
-python -m src.data.data_collector
-```
-
-Isso irá:
-- Baixar dados OHLCV da Binance
-- Calcular indicadores técnicos
-- Normalizar os dados
-- Dividir em treino/validação/teste
-
-### Fase 2: Treinar o Agente
+### Development (local)
 
 ```bash
-python -m src.training.train --mode train
+venv\Scripts\activate             # Windows
+source venv/bin/activate          # Linux/macOS
+streamlit run dashboard_new.py
 ```
 
-O treinamento irá:
-- Criar um ambiente de simulação
-- Treinar o agente PPO por 100.000 timesteps (configurável)
-- Salvar o melhor modelo em `models/`
-- Gerar logs em `logs/`
+Open **http://localhost:8501** → select symbols → **▶️ Iniciar Engine**.
 
-Para visualizar o treinamento no TensorBoard:
+### Production (Docker)
 
 ```bash
-tensorboard --logdir logs/tensorboard
+docker compose up -d
+docker compose logs -f
 ```
-
-### Fase 3: Avaliar o Modelo
-
-```bash
-python -m src.training.train --mode eval --model models/ppo_trading_agent_XXXXXXXX.zip
-```
-
-### Fase 4: Executar em Paper Trading
-
-```bash
-python -m src.execution.executor --model models/ppo_trading_agent_XXXXXXXX.zip --mode paper
-```
-
-### Fase 5: Executar em Live Trading (⚠️ USE COM CAUTELA)
-
-```bash
-python -m src.execution.executor --model models/ppo_trading_agent_XXXXXXXX.zip --mode live
-```
-
-## 📁 Estrutura do Projeto
-
-```
-AGENTE_TRANDING/
-├── config.yaml              # Configurações principais
-├── requirements.txt         # Dependências Python
-├── .env.example            # Template de variáveis de ambiente
-├── README.md               # Este arquivo
-│
-├── src/
-│   ├── __init__.py
-│   │
-│   ├── environment/        # Ambiente Gymnasium
-│   │   ├── __init__.py
-│   │   └── trading_env.py
-│   │
-│   ├── data/              # Coleta e processamento de dados
-│   │   ├── __init__.py
-│   │   └── data_collector.py
-│   │
-│   ├── risk/              # Gestão de risco
-│   │   ├── __init__.py
-│   │   └── risk_manager.py
-│   │
-│   ├── training/          # Treinamento do agente
-│   │   ├── __init__.py
-│   │   └── train.py
-│   │
-│   └── execution/         # Execução ao vivo
-│       ├── __init__.py
-│       └── executor.py
-│
-├── data/                  # Dados processados (gerado)
-├── models/                # Modelos treinados (gerado)
-└── logs/                  # Logs de treinamento e trading (gerado)
-```
-
-## ⚙️ Configuração
-
-Edite `config.yaml` para ajustar:
-
-- **Símbolo e timeframe** do mercado
-- **Indicadores técnicos** a usar
-- **Hiperparâmetros do RL** (learning rate, batch size, etc.)
-- **Parâmetros de risco** (stop loss, take profit, alavancagem)
-- **Tamanho de posição** e capital inicial
-
-## 🧠 Como Funciona
-
-### 1. Ambiente de RL (TradingEnv)
-
-O ambiente simula um mercado de trading onde o agente:
-- **Observa:** Preços, indicadores técnicos e estado da carteira
-- **Age:** Fica Flat, abre Long ou abre Short
-- **Recebe recompensa:** Baseado no PnL e custos de transação
-
-### 2. Função de Recompensa
-
-$$R_t = (\text{Balance}_t - \text{Balance}_{t-1}) - (\text{Trade Cost} \times \text{Action Changed})$$
-
-A recompensa incentiva o agente a:
-- Maximizar lucros
-- Minimizar custos de transação
-- Evitar overtrading
-
-### 3. Gestão de Risco
-
-O Risk Manager aplica regras hardcoded:
-- **Kelly Criterion** para tamanho de posição
-- **Stop Loss automático** (2%)
-- **Take Profit automático** (4%)
-- **Controle de Drawdown** (15% máximo)
-- **Limite de alavancagem** (3x)
-
-## 📊 Métricas de Avaliação
-
-O sistema rastreia:
-- Win Rate (taxa de vitória)
-- Total de trades
-- PnL (Profit and Loss)
-- Drawdown
-- Sharpe Ratio (planejado)
-
-## ⚠️ Avisos Importantes
-
-1. **NÃO USE EM PRODUÇÃO SEM TESTES EXTENSIVOS**
-2. Comece sempre com a **testnet da Binance**
-3. Use **Paper Trading** antes de arriscar capital real
-4. O passado **não garante** retornos futuros
-5. Trading automatizado envolve **riscos significativos**
-6. Nunca invista mais do que pode perder
-
-## 🔧 Troubleshooting
-
-### Erro: "Module not found"
-```bash
-# Certifique-se de estar no diretório raiz
-cd AGENTE_TRANDING
-python -m src.data.data_collector
-```
-
-### Erro: "API Key inválida"
-- Verifique se o `.env` está configurado corretamente
-- Certifique-se de usar chaves da testnet primeiro
-
-### Modelo não converge
-- Aumente `total_timesteps` no `config.yaml`
-- Ajuste `learning_rate` (tente 0.0001 ou 0.0005)
-- Verifique se os dados estão normalizados
-
-## 📚 Referências
-
-- [Stable Baselines3 Docs](https://stable-baselines3.readthedocs.io/)
-- [Gymnasium Documentation](https://gymnasium.farama.org/)
-- [Binance Futures API](https://binance-docs.github.io/apidocs/futures/en/)
-- [Kelly Criterion](https://en.wikipedia.org/wiki/Kelly_criterion)
-
-## 📝 Licença
-
-Este projeto é fornecido "como está" para fins educacionais.
-
-## 🤝 Contribuições
-
-Contribuições são bem-vindas! Abra uma issue ou pull request.
 
 ---
 
-**⚠️ DISCLAIMER:** Este software é fornecido para fins educacionais. O uso em produção é por sua conta e risco. Os desenvolvedores não se responsabilizam por perdas financeiras.
+## File Structure
+
+```
+AGENTE TRANDING/
+├── dashboard_new.py          ← Entry point
+├── config.yaml               ← Central config
+├── auth_config.yaml          ← Login credentials (never commit to public repos)
+├── .env                      ← API secrets (never commit!)
+├── requirements.txt          ← Dev dependencies
+├── requirements-docker.txt   ← Docker (Linux) dependencies
+├── Dockerfile
+├── docker-compose.yml
+├── dashboard/                ← Modular source
+├── src/                      ← Legacy (deprecated)
+├── models/                   ← Trained LSTM .zip files
+├── data/                     ← Runtime state (engine_state.json)
+├── logs/                     ← Rotating log files
+├── tests/                    ← pytest suite (37 tests)
+└── kline_cache/              ← Disk cache for historical candles
+```
+
+---
+
+## Risk Management
+
+Five layers of capital protection:
+
+1. **Fixed SL/TP** — percentage-based, always active
+2. **ATR-based SL** — adapts to volatility
+3. **Trailing Stop** — activates after `trailing_stop_activation` gain
+4. **Breakeven after TP1** — SL moves to entry after partial profit
+5. **Exposure guard** — blocks new trades at `max_total_exposure`
+
+Additional guards:
+- **Correlation guard** — blocks correlated pairs (Pearson > 0.70, 50 candles)
+- **Kelly sizing** — position size adapts to recent win rate (last 30 trades)
+- **WS stale guard** — blocks inference if data > 5 minutes old
+- **State persistence** — SL/TP/trail state survives bot restarts
+
+---
+
+## Docker
+
+```bash
+docker build -t trading-bot .
+docker compose up -d
+curl http://localhost:8501/_stcore/health
+```
+
+**Mounted volumes:** `./data`, `./logs`, `./models`, `./config.yaml`
+
+---
+
+## Authentication
+
+Off by default. To enable:
+
+**`config.yaml`:**
+```yaml
+auth:
+  enabled: true
+  cookie_key: "a-random-64-char-secret"
+```
+
+**Change password:**
+```bash
+python -c "import bcrypt; print(bcrypt.hashpw(b'your-password', bcrypt.gensalt(12)).decode())"
+```
+Replace the `password` field in `auth_config.yaml`.
+
+---
+
+## Telegram Notifications
+
+1. Create bot via [@BotFather](https://t.me/BotFather) → get `TOKEN`
+2. Get `CHAT_ID` via [@userinfobot](https://t.me/userinfobot)
+3. Edit `config.yaml`:
+
+```yaml
+notifications:
+  telegram:
+    enabled: true
+    token: "123456789:AABBcc..."
+    chat_id: "-1001234567890"
+    events: [sl, tp, trade, drawdown, ws_down, engine_err]
+```
+
+---
+
+## FAQ & Troubleshooting
+
+**`KeyError: 'APIError'` on startup**
+Check `BINANCE_API_KEY` in `.env`. Futures must be enabled, IP whitelist correct.
+
+**WS disconnects frequently**
+WS manager auto-reconnects. Check internet stability. On VPS, ensure Binance WS endpoints (port 443) are not blocked.
+
+**`ModuleNotFoundError: TA-Lib`**
+TA-Lib C library not installed. See [Installation → Step 2](#installation).
+
+**Model not found**
+Ensure the `.zip` model is in `models/` and the path matches `config.yaml`.
+
+**Tests fail**
+```bash
+python -m pytest tests/ -v --tb=short
+```
+
+**From Testnet to Live checklist:**
+- [ ] ≥ 2 weeks testnet without crashes
+- [ ] Set `mode: "live"` in `config.yaml`
+- [ ] Add live API keys to `.env`
+- [ ] Start with `position_size: 0.005` (0.5%)
+- [ ] Monitor Telegram for 48h before increasing size
+
+---
+
+*Private — all rights reserved.*

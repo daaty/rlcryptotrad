@@ -1,4 +1,8 @@
 """
+DEPRECATED — Este módulo não é mais utilizado pelo dashboard.
+Use dashboard/trading/executor.py (python-binance) para toda lógica de ordens.
+Este arquivo é mantido apenas como referência histórica (implementação CCXT).
+
 Executor de Trading - Conecta o agente treinado à Binance API
 Executa operações em Paper Trading ou Live.
 """
@@ -387,6 +391,56 @@ def main():
             # Obtém saldo e estado
             balance = executor.get_account_balance()
             current_price = executor.get_current_price()
+            
+            # 🆕 MONITORAMENTO ATIVO DE POSIÇÕES ABERTAS
+            if executor.position != 0:
+                # Verifica Stop Loss
+                should_stop = executor.risk_manager.should_stop_loss(
+                    executor.entry_price,
+                    current_price,
+                    executor.position
+                )
+                
+                if should_stop:
+                    pnl_pct = ((current_price - executor.entry_price) / executor.entry_price) * executor.position * 100
+                    print(f"\n🛑 STOP LOSS ATINGIDO!")
+                    print(f"   Preço Entrada: ${executor.entry_price:.2f}")
+                    print(f"   Preço Atual: ${current_price:.2f}")
+                    print(f"   Perda: {pnl_pct:.2f}%")
+                    executor._close_position(current_price, balance)
+                    print(f"   ✅ Posição fechada para proteger capital\n")
+                    time.sleep(args.interval)
+                    continue
+                
+                # Verifica Take Profit
+                should_tp, tp_level = executor.risk_manager.should_take_profit(
+                    executor.entry_price,
+                    current_price,
+                    executor.position,
+                    return_level=True
+                )
+                
+                if should_tp:
+                    pnl_pct = ((current_price - executor.entry_price) / executor.entry_price) * executor.position * 100
+                    print(f"\n🎯 TAKE PROFIT NÍVEL {tp_level} ATINGIDO!")
+                    print(f"   Preço Entrada: ${executor.entry_price:.2f}")
+                    print(f"   Preço Atual: ${current_price:.2f}")
+                    print(f"   Lucro: {pnl_pct:.2f}%")
+                    
+                    if tp_level == 2:
+                        # Fecha posição completa
+                        executor._close_position(current_price, balance)
+                        print(f"   ✅ Posição fechada completamente\n")
+                    else:
+                        # Fecha parcialmente (50%)
+                        partial_qty = executor.position_size * 0.5
+                        side = 'sell' if executor.position == 1 else 'buy'
+                        executor.place_market_order(side, partial_qty)
+                        executor.position_size *= 0.5
+                        print(f"   ✅ Fechamento parcial (50%)\n")
+                    
+                    time.sleep(args.interval)
+                    continue
             
             # Estado da carteira
             portfolio_state = np.array([

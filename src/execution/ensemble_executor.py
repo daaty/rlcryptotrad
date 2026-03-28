@@ -421,7 +421,64 @@ class EnsembleExecutor:
                 logger.info(f"\n{'='*60}")
                 logger.info(f"Iteração {iteration} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 
-                # 1. Coleta observação
+                # 1. Pega preço atual
+                ticker = self.exchange.fetch_ticker(self.symbol)
+                current_price = ticker['last']
+                logger.info(f"💵 Preço: ${current_price:.2f}")
+                
+                # 🆕 MONITORAMENTO ATIVO DE POSIÇÕES ABERTAS
+                if self.position != 0:
+                    # Verifica Stop Loss
+                    should_stop = self.risk_manager.should_stop_loss(
+                        self.entry_price,
+                        current_price,
+                        self.position
+                    )
+                    
+                    if should_stop:
+                        pnl_pct = ((current_price - self.entry_price) / self.entry_price) * self.position * 100
+                        logger.warning(f"\n🛑 STOP LOSS ATINGIDO!")
+                        logger.info(f"   Preço Entrada: ${self.entry_price:.2f}")
+                        logger.info(f"   Preço Atual: ${current_price:.2f}")
+                        logger.info(f"   Perda: {pnl_pct:.2f}%")
+                        self._close_position(current_price)
+                        logger.info(f"   ✅ Posição fechada para proteger capital")
+                        time.sleep(check_interval)
+                        continue
+                    
+                    # Verifica Take Profit
+                    should_tp, tp_level = self.risk_manager.should_take_profit(
+                        self.entry_price,
+                        current_price,
+                        self.position,
+                        return_level=True
+                    )
+                    
+                    if should_tp:
+                        pnl_pct = ((current_price - self.entry_price) / self.entry_price) * self.position * 100
+                        logger.info(f"\n🎯 TAKE PROFIT NÍVEL {tp_level} ATINGIDO!")
+                        logger.info(f"   Preço Entrada: ${self.entry_price:.2f}")
+                        logger.info(f"   Preço Atual: ${current_price:.2f}")
+                        logger.info(f"   Lucro: {pnl_pct:.2f}%")
+                        
+                        if tp_level == 2:
+                            # Fecha posição completa
+                            self._close_position(current_price)
+                            logger.info(f"   ✅ Posição fechada completamente")
+                        else:
+                            # Fecha parcialmente (50%)
+                            partial_qty = self.position_size * 0.5
+                            side = 'sell' if self.position == 1 else 'buy'
+                            order = self.exchange.create_market_order(
+                                self.symbol, side, partial_qty
+                            )
+                            self.position_size *= 0.5
+                            logger.info(f"   ✅ Fechamento parcial (50%)")
+                        
+                        time.sleep(check_interval)
+                        continue
+                
+                # 2. Coleta observação
                 obs = self.get_observation()
                 
                 if obs is None:
@@ -429,7 +486,7 @@ class EnsembleExecutor:
                     time.sleep(check_interval)
                     continue
                 
-                # 2. Previsão do modelo
+                # 3. Previsão do modelo
                 action, info = self.model.predict(obs, deterministic=True)
                 
                 # Log detalhado para ensemble
@@ -439,11 +496,6 @@ class EnsembleExecutor:
                     logger.info(f"   Concordância: {info['agreement']:.1%}")
                 else:
                     logger.info(f"🤖 Ação: {action} ({['Flat', 'Long', 'Short'][action]})")
-                
-                # 3. Pega preço atual
-                ticker = self.exchange.fetch_ticker(self.symbol)
-                current_price = ticker['last']
-                logger.info(f"💵 Preço: ${current_price:.2f}")
                 
                 # 4. Executa ação
                 success = self.execute_action(action, current_price)

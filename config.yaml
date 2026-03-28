@@ -1,121 +1,160 @@
-# Configurações do Agente de Trading com RL + LLM
-
-# Modo de Execução
-mode: "testnet"  # Opções: "paper" (local), "testnet" (simulação), "live" (real)
-
-# Dados
-data:
-  symbol: "BTC/USDT"
-  timeframe: "15m"
-  limit: 1500  # Máximo permitido pela Binance por request (mais dados = melhor aprendizado)
-  exchange: "binance"
-  
-# Ambiente de Trading
-environment:
-  initial_balance: 10000  # USDT
-  commission: 0.001  # 0.1% (Binance Futures maker/taker realista)
-  slippage: 0.0005  # 0.05% slippage médio em alta liquidez
-  leverage: 3  # Alavancagem máxima
-  position_size: 0.1  # 10% do saldo por trade
-  window_size: 50  # Janela de observação
-  
-# Indicadores Técnicos
-indicators:
-  - name: "rsi"
-    length: 14
-  - name: "sma"
-    length: 20
-  - name: "sma"
-    length: 50
-  - name: "bbands"
-    length: 20
-    std: 2
-  - name: "macd"
-    fast: 12
-    slow: 26
-    signal: 9
-
-# 🆕 Ensemble de Modelos RL
-ensemble:
-  enabled: true
-  algorithms: ["ppo", "td3"]  # Ambos serão retreinados com novo reward
-  strategy: "weighted"  # majority, weighted, confidence, best, average
-  weights:  # Pesos para strategy='weighted'
-    ppo: 0.50
-    td3: 0.50
-    
-# Treinamento RL (para cada modelo)
-training:
-  algorithm: "PPO"  # Usado quando rodar single model
-  total_timesteps: 2000000  # 2M timesteps para modelos PROFISSIONAIS (3-5h)
-  learning_rate: 0.0003
-  n_steps: 2048
-  batch_size: 64
-  n_epochs: 10
-  gamma: 0.99
-  gae_lambda: 0.95
-  clip_range: 0.2
-  ent_coef: 0.01
-
-# 🆕 Análise de Sentimento com LLM
-sentiment:
-  enabled: true
-  
-  # Coleta de Notícias
-  news:
-    sources:
-      - newsapi  # Requer NEWSAPI_KEY no .env
-      - rss  # Feeds RSS gratuitos
-    keywords:
-      - "bitcoin"
-      - "BTC"
-      - "cryptocurrency"
-      - "crypto market"
-      - "blockchain"
-    rss_feeds:
-      - "https://cointelegraph.com/rss"
-      - "https://www.coindesk.com/arc/outboundfeeds/rss/"
-      - "https://cryptonews.com/news/feed/"
-      - "https://decrypt.co/feed"
-    update_interval: 3600  # Atualiza a cada 1h
-    history_hours: 24  # Mantém últimas 24h
-  
-  # Análise com LLM
-  llm:
-    provider: "openai"  # openai, anthropic, ou local
-    model: "gpt-3.5-turbo"  # ou gpt-4, claude-3-opus, etc
-    temperature: 0.3  # Baixo = mais determinístico
-    fallback: "local"  # Usa FinBERT se API falhar
-    # api_key via .env: OPENAI_API_KEY ou ANTHROPIC_API_KEY
-  
-  # Processamento
-  processor:
-    lookback_hours: [1, 6, 24]  # Janelas temporais
-    decay_factor: 0.95  # Peso temporal (mais recente = maior)
-    min_confidence: 0.5  # Ignora análises com confiança < 50%
-  
-# Gestão de Risco
-risk_management:
-  max_leverage: 3
-  stop_loss_pct: 0.02  # 2%
-  take_profit_pct: 0.04  # 4%
-  max_drawdown: 0.15  # 15%
-  kelly_fraction: 0.25  # Fração do Kelly Criterion
-  
-# Execução
-execution:
-  mode: "paper"  # paper ou live
-  check_interval: 60  # segundos
-  use_ensemble: true  # Usa ensemble ou modelo único
-  model_path: "models/ensemble"  # Diretório dos modelos
-  
-# API Binance (usar .env para chaves sensíveis)
+auth:
+  cookie_expiry_days: 7
+  cookie_key: change-this-to-a-random-secret-in-production
+  cookie_name: trading_bot_auth
+  enabled: false
 binance:
   testnet: true
-  # BINANCE_API_KEY e BINANCE_SECRET_KEY no .env
-
-# Logging
+data:
+  exchange: binance
+  limit: 1500
+  primary_symbol: BTC/USDT
+  symbols:
+  - BTC/USDT
+  - ETH/USDT
+  - SOL/USDT
+  - BNB/USDT
+  - XRP/USDT
+  - ADA/USDT
+  - DOGE/USDT
+  - AVAX/USDT
+  - DOT/USDT
+  - LINK/USDT
+  - MATIC/USDT
+  - LTC/USDT
+  - UNI/USDT
+  - ATOM/USDT
+  - FIL/USDT
+  - NEAR/USDT
+  - APT/USDT
+  - ARB/USDT
+  - OP/USDT
+  - INJ/USDT
+  timeframes:
+    operational: 1h
+    strategic: 4h
+    tactical: 15m
+ensemble:
+  algorithms:
+  - ppo
+  - td3
+  enabled: true
+  strategy: weighted
+  weights:
+    ppo: 0.5
+    td3: 0.5
+entry_filter:
+  mode: strict
+environment:
+  commission: 0.0004
+  enable_indicator_shaping: true
+  initial_balance: 10000
+  leverage: 1.5
+  max_episode_steps: 2000
+  position_size: 0.03
+  slippage: 0.0005
+  use_sharpe_reward: true
+  window_size: 50
+execution:
+  check_interval: 60
+  mode: paper
+  model_path: models/ensemble
+  use_ensemble: true
+indicators:
+- length: 14
+  name: rsi
+- length: 20
+  name: sma
+- length: 50
+  name: sma
+- length: 20
+  name: bbands
+  std: 2
+- fast: 12
+  name: macd
+  signal: 9
+  slow: 26
 logging:
-  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
-  save_trades: true
+  level: INFO
   save_sentiment: true
+  save_trades: true
+mode: testnet
+models:
+  lstm_active:
+    path: models/recurrent_ppo_v19_multipair_20260306_195359_320000_steps.zip
+    run_id: 20260306195359
+    steps: 320000
+    vecnorm_path: models/recurrent_ppo_v19_multipair_20260306_195359_vecnormalize_320000_steps.pkl
+    version: v19
+notifications:
+  telegram:
+    chat_id: ''
+    enabled: false
+    events:
+    - sl
+    - tp
+    - trade
+    - drawdown
+    - ws_down
+    - engine_err
+    token: ''
+risk_management:
+  correlation_threshold: 0.85
+  kelly_fraction: 0.25
+  max_drawdown: 0.15
+  max_drawdown_daily: 0.1
+  max_drawdown_kill_switch: 0.15
+  max_exposure_per_asset: 0.25
+  max_leverage: 3
+  max_total_exposure: 0.6
+  max_win_streak_multiplier: 1.2
+  min_notional_usdt: 20.0
+  min_win_streak_multiplier: 0.8
+  stop_loss_atr_multiplier: 2.0
+  stop_loss_pct: 0.02
+  take_profit_pct: 0.04
+  trailing_stop_activation: 0.03
+  trailing_stop_distance: 0.015
+  warm_up_candles: 50
+sentiment:
+  enabled: true
+  llm:
+    fallback: local
+    model: gpt-3.5-turbo
+    provider: openai
+    temperature: 0.3
+  news:
+    history_hours: 24
+    keywords:
+    - bitcoin
+    - BTC
+    - cryptocurrency
+    - crypto market
+    - blockchain
+    rss_feeds:
+    - https://cointelegraph.com/rss
+    - https://www.coindesk.com/arc/outboundfeeds/rss/
+    - https://cryptonews.com/news/feed/
+    - https://decrypt.co/feed
+    sources:
+    - newsapi
+    - rss
+    update_interval: 3600
+  processor:
+    decay_factor: 0.95
+    lookback_hours:
+    - 1
+    - 6
+    - 24
+    min_confidence: 0.5
+training:
+  algorithm: PPO
+  batch_size: 64
+  clip_range: 0.2
+  ent_coef: 0.01
+  gae_lambda: 0.95
+  gamma: 0.99
+  learning_rate: 0.0003
+  n_epochs: 10
+  n_steps: 2048
+  total_timesteps: 2000000

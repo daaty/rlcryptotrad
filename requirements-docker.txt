@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────
+# requirements-docker.txt — Linux/container build
+# Excludes Windows-only packages (torch-directml, TA-Lib via binary)
+# TA-Lib C library is compiled from source in the Dockerfile
+# ─────────────────────────────────────────────────────────────
+
+# Core RL & ML
+gymnasium==0.29.1
+stable-baselines3==2.2.1
+sb3-contrib>=2.2.1
+torch>=2.0.0              # CPU build; for GPU add --index-url https://download.pytorch.org/whl/cu121
+numpy>=1.24.0
+pandas>=2.0.0
+tensorboard>=2.15.0
+scikit-learn>=1.3.0
+
+# Technical Analysis
+TA-Lib>=0.4.28
+
+# Trading & Exchange
+python-binance>=1.0.19
+requests>=2.31.0
+aiohttp>=3.9.0
+websockets>=12.0
+
+# Config & Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0
+
+# Dashboard
+streamlit>=1.28.0
+matplotlib>=3.7.0
+plotly>=5.17.0
+
+# Notifications
+requests>=2.31.0           # used by Telegram notifier (httpx or raw requests)
+
+# Reports (Phase 4.3)
+fpdf2>=2.7.9
+
+# Authentication (Phase 4.4)
+streamlit-authenticator>=0.3.1
+bcrypt>=4.0.0
+
+# Logging & DB
+sqlalchemy>=2.0.0
+
+# Tests (only in dev; harmless to include in container)
+pytest>=7.4.0

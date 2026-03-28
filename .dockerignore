@@ -1,0 +1,66 @@
+# ─── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+wheels/
+
+# ─── Virtual environments ─────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+.env.bak
+
+# ─── Secrets (NEVER in image) ─────────────────────────────────
+.env
+*.key
+*_secret*
+secrets.yaml
+auth_config.yaml
+
+# ─── Model artefacts (too large; mount as volume) ─────────────
+models/
+*.zip
+*.pkl
+*.pt
+*.pth
+
+# ─── Data & logs (mount as volume) ────────────────────────────
+data/
+logs/
+
+# ─── Test artefacts ───────────────────────────────────────────
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ─── IDE & OS ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Git ──────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+
+# ─── Backtest reports & analysis docs ─────────────────────────
+backtest_report_*.txt
+ANALISE_*.md
+ANTI_BAN_*.md
+PLANO_*.md
+ARQUITETURA_*.md

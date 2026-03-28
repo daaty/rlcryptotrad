@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from pathlib import Path
-from stable_baselines3 import PPO, TD3
+from stable_baselines3 import PPO, TD3, SAC
 from src.environment.trading_env import TradingEnv
 from stable_baselines3.common.vec_env import DummyVecEnv
 import matplotlib.pyplot as plt
@@ -39,6 +39,8 @@ class Backtester:
             self.model = PPO.load(model_path)
         elif self.model_type == "TD3":
             self.model = TD3.load(model_path)
+        elif self.model_type == "SAC":
+            self.model = SAC.load(model_path)
         else:
             raise ValueError(f"Tipo de modelo não suportado: {self.model_type}")
         
@@ -54,16 +56,21 @@ class Backtester:
         
         print(f"  {len(self.df)} candles carregados")
         
-        # Criar ambiente de teste
-        env_config = self.config['environment']
+        # Criar ambiente de teste (V6: MESMAS CONFIGS QUE TREINO!)
+        # CRÍTICO: Deve ser IDÊNTICO ao ambiente usado no treino
         self.env = TradingEnv(
             df=self.df,
-            initial_balance=env_config['initial_balance'],
-            commission=env_config.get('commission', 0.001),
-            slippage=env_config.get('slippage', 0.0005),
-            leverage=env_config['leverage'],
-            position_size=env_config['position_size'],
-            window_size=env_config['window_size']
+            initial_balance=10000,           # V6: $10k
+            commission=0.0004,                # V6: 0.04% (Binance taker fee)
+            slippage=0.0005,                  # V6: 0.05%
+            leverage=1.5,                     # V6: 1.5x (seguro)
+            position_size=0.05,               # V6: 5% base
+            window_size=50,                   # V6: 50 candles
+            max_episode_steps=2000,           # V6: 2000 steps (episódios curtos)
+            random_start=False,               # Backtest: sequência do início
+            persist_balance=False,            # Backtest: sem persistência
+            use_sharpe_reward=True,           # V6: usa Sharpe Ratio
+            enable_indicator_shaping=True     # V6: reward shaping com 6 técnicas
         )
         
         # Armazenar histórico
@@ -86,6 +93,8 @@ class Backtester:
             return 'PPO'
         elif 'td3' in name:
             return 'TD3'
+        elif 'sac' in name:
+            return 'SAC'
         
         # Se não detectou pelo nome, inspeciona o conteúdo do .zip
         try:
@@ -138,6 +147,9 @@ class Backtester:
         truncated = False
         step = 0
         
+        # CRÍTICO: Respeitar max_episode_steps do ambiente
+        max_steps = self.env.max_episode_steps
+        
         # Resetar histórico
         self.history = {
             'balance': [self.env.balance],
@@ -147,8 +159,9 @@ class Backtester:
             'actions': []
         }
         
-        while not (done or truncated):
-            # Prever ação
+        # FORÇAR truncation após max_episode_steps (igual treino!)
+        while not (done or truncated) and step < max_steps:
+            # Prever ação DETERMINÍSTICA (sem ruído no backtest!)
             action, _states = self.model.predict(obs, deterministic=True)
             
             # Executar ação
@@ -234,6 +247,29 @@ class Backtester:
         # Expectancy (média de lucro por trade)
         expectancy = self.env.total_pnl / total_trades if total_trades > 0 else 0
         
+        # === NOVAS MÉTRICAS DIAGNÓSTICAS ===
+        
+        # Trade frequency (trades por dia)
+        total_steps = len(self.history['balance'])
+        total_days = total_steps * 15 / 60 / 24  # 15min candles
+        trade_frequency = total_trades / total_days if total_days > 0 else 0
+        
+        # Long/Short ratio
+        positions = np.array(self.history['position'])
+        long_count = np.sum(positions == 1)
+        short_count = np.sum(positions == -1)
+        flat_count = np.sum(positions == 0)
+        long_pct = long_count / len(positions) if len(positions) > 0 else 0
+        short_pct = short_count / len(positions) if len(positions) > 0 else 0
+        flat_pct = flat_count / len(positions) if len(positions) > 0 else 0
+        
+        # Avg holding time (steps por trade)
+        avg_holding_time = total_steps / total_trades if total_trades > 0 else 0
+        avg_holding_hours = avg_holding_time * 15 / 60  # Converter para horas
+        
+        # Calmar Ratio (return / abs(max_drawdown))
+        calmar_ratio = total_return / abs(max_drawdown) if max_drawdown < 0 else 0
+        
         return {
             'initial_balance': initial_balance,
             'final_balance': final_balance,
@@ -246,7 +282,14 @@ class Backtester:
             'max_drawdown': max_drawdown,
             'profit_factor': profit_factor,
             'expectancy': expectancy,
-            'total_pnl': self.env.total_pnl
+            'total_pnl': self.env.total_pnl,
+            # Métricas diagnósticas
+            'trade_frequency': trade_frequency,
+            'long_pct': long_pct,
+            'short_pct': short_pct,
+            'flat_pct': flat_pct,
+            'avg_holding_hours': avg_holding_hours,
+            'calmar_ratio': calmar_ratio
         }
     
     def _aggregate_results(self, results_list: list) -> dict:
@@ -342,10 +385,11 @@ DADOS:
 
 CONFIGURACAO:
   Balance Inicial: ${metrics['initial_balance']:,.2f}
-  Commission: {self.config['environment'].get('commission', 0.001):.4f} ({self.config['environment'].get('commission', 0.001)*100:.2f}%)
-  Slippage: {self.config['environment'].get('slippage', 0.0005):.4f} ({self.config['environment'].get('slippage', 0.0005)*100:.2f}%)
-  Position Size: {self.config['environment']['position_size']:.1%}
-  Leverage: {self.config['environment']['leverage']}x
+  Commission: {self.env.commission:.4f} ({self.env.commission*100:.2f}%)
+  Slippage: {self.env.slippage:.4f} ({self.env.slippage*100:.2f}%)
+  Position Size: {self.env.position_size:.1%}
+  Leverage: {self.env.leverage}x
+  Max Episode Steps: {self.env.max_episode_steps}
 
 ╔══════════════════════════════════════════════════════════════╗
 ║                     METRICAS DE PERFORMANCE                  ║
@@ -362,11 +406,19 @@ TRADING:
   Losses: {metrics['losses']}
   Win Rate: {metrics['win_rate']:.2%}
   Expectancy: ${metrics['expectancy']:.2f} por trade
+  Trade Frequency: {metrics['trade_frequency']:.2f} trades/dia
+  Avg Holding Time: {metrics['avg_holding_hours']:.1f} horas
+  
+POSIÇÕES:
+  Long: {metrics['long_pct']:.1%}
+  Short: {metrics['short_pct']:.1%}
+  Flat: {metrics['flat_pct']:.1%}
   
 RISCO:
   Sharpe Ratio: {metrics['sharpe_ratio']:.4f}
   Max Drawdown: {metrics['max_drawdown']:.2%}
   Profit Factor: {metrics['profit_factor']:.2f}
+  Calmar Ratio: {metrics['calmar_ratio']:.2f}
 
 AVALIACAO:
 """
@@ -450,7 +502,22 @@ def main():
     # Criar backtester
     bt = Backtester(model_path, data_path)
     
-    # Rodar backtest
+    # CORRIGIDO: Rodar UM ÚNICO episódio contínuo até esgotar todos os dados
+    # Isso garante backtest sequencial de verdade (não repetir mesmos dados)
+    total_candles = len(bt.df)
+    
+    # Ajustar max_episode_steps para cobrir todo o dataset
+    bt.env.max_episode_steps = total_candles - bt.env.window_size - 10  # Margem de segurança
+    
+    print(f"\n{'='*64}")
+    print(f"BACKTEST SEQUENCIAL CONTÍNUO (CORRIGIDO V6.1)")
+    print(f"{'='*64}")
+    print(f"Total candles: {total_candles}")
+    print(f"Steps a executar: {bt.env.max_episode_steps}")
+    print(f"Período: {total_candles * 15 / 60 / 24:.1f} dias (15min candles)")
+    print(f"{'='*64}\n")
+    
+    # Rodar backtest em um único episódio contínuo
     results = bt.run(episodes=1, verbose=True)
     
     # Gerar relatório

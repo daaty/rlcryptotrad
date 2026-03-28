@@ -56,8 +56,9 @@ class MultiSymbolTrainer:
         symbol: str,
         train_data_path: str,
         model_class,
-        timesteps: int = 200000,  # 200k para teste rápido
-        model_name: str = "base"
+        timesteps: int = 2000000,  # AUMENTADO: 1M -> 2M steps
+        model_name: str = "base",
+        continue_training: bool = False  # NOVO: permite continuar de checkpoint
     ):
         """
         Treina modelo BASE no símbolo principal (geralmente BTC).
@@ -67,22 +68,26 @@ class MultiSymbolTrainer:
             symbol: Símbolo do ativo (ex: 'BTC/USDT')
             train_data_path: Caminho dos dados de treino
             model_class: PPO ou TD3
-            timesteps: Timesteps de treinamento
+            timesteps: Timesteps de treinamento (default: 1M)
             model_name: Nome para salvar
+            continue_training: Se True, continua de checkpoint existente
         """
         print("\n" + "="*64)
-        print(f"🚀 TREINANDO MODELO BASE: {symbol}")
+        print(f"[TRAIN] TREINANDO MODELO BASE: {symbol}")
         print("="*64)
         print(f"Modelo: {model_class.__name__}")
         print(f"Timesteps: {timesteps:,}")
         print(f"Dados: {train_data_path}")
+        
+        if continue_training:
+            print(f"[CONTINUE] Continuando treinamento de checkpoint existente")
         
         # Carregar dados
         df = pd.read_csv(train_data_path)
         if 'timestamp' in df.columns:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
         
-        print(f"✅ {len(df):,} candles carregados")
+        print(f"[OK] {len(df):,} candles carregados")
         
         # Criar ambiente
         env_config = self.config['environment']
@@ -93,43 +98,60 @@ class MultiSymbolTrainer:
             slippage=env_config.get('slippage', 0.0005),
             leverage=env_config['leverage'],
             position_size=env_config['position_size'],
-            window_size=env_config['window_size']
+            window_size=env_config['window_size'],
+            max_episode_steps=5000,  # AUMENTADO: 1500 -> 5000
+            random_start=True,  # Random start mantido
+            persist_balance=False,  # DESABILITADO: Causava truncation instantânea
+            use_sharpe_reward=True  # Usa Sharpe Ratio como reward
         )
         env = DummyVecEnv([lambda: env])
         
-        # Criar modelo
-        if model_class == PPO:
-            model = PPO(
-                "MlpPolicy",
+        # Criar modelo ou carregar checkpoint
+        symbol_clean = symbol.replace('/', '').lower()
+        checkpoint_path = f'models/{model_name}_{symbol_clean}_final.zip'
+        
+        if continue_training and Path(checkpoint_path).exists():
+            print(f"[LOAD] Carregando checkpoint: {checkpoint_path}")
+            if model_class == PPO:
+                model = PPO.load(checkpoint_path, env=env, device=self.device)
+                print(f"[OK] Modelo PPO carregado, continuando treinamento...")
+            else:  # TD3
+                model = TD3.load(checkpoint_path, env=env, device=self.device)
+                print(f"[OK] Modelo TD3 carregado, continuando treinamento...")
+        else:
+            print(f"[NEW] Criando novo modelo do zero...")
+            if model_class == PPO:
+                model = PPO(
+                    "MlpPolicy",
+                    env,
+                    learning_rate=3e-4,
+                    n_steps=4096,
+                    batch_size=256,
+                    n_epochs=15,
+                    gamma=0.995,
+                    gae_lambda=0.95,
+                    clip_range=0.2,
+                    ent_coef=0.1,
+                    verbose=1,
+                    device=self.device
+                )
+            else:  # TD3
+                from stable_baselines3.common.noise import NormalActionNoise
+                
+                # AUMENTAR NOISE DRASTICAMENTE para forçar exploração
+                # Action space é Box(1,) então noise shape = (1,)
+                action_noise = NormalActionNoise(
+                    mean=np.zeros(1), 
+                    sigma=0.5 * np.ones(1)  # 0.5 = 50% de noise (vs 0.1 padrão)
+                )
+                
+                model = TD3(
+                    "MlpPolicy",
                 env,
-                learning_rate=3e-4,
-                n_steps=4096,
-                batch_size=256,
-                n_epochs=15,
-                gamma=0.995,
-                gae_lambda=0.95,
-                clip_range=0.2,
-                ent_coef=0.1,  # AUMENTADO de 0.02 para 0.1 (força exploração!)
-                verbose=1,
-                device=self.device  # GPU AMD/NVIDIA ou CPU
-            )
-        else:  # TD3
-            from stable_baselines3.common.noise import NormalActionNoise
-            
-            # AUMENTAR NOISE DRASTICAMENTE para forçar exploração
-            # Action space é Box(1,) então noise shape = (1,)
-            action_noise = NormalActionNoise(
-                mean=np.zeros(1), 
-                sigma=0.5 * np.ones(1)  # 0.5 = 50% de noise (vs 0.1 padrão)
-            )
-            
-            model = TD3(
-                "MlpPolicy",
-                env,
-                learning_rate=3e-4,
-                buffer_size=500000,
-                learning_starts=10000,
-                batch_size=256,
+                learning_rate=5e-4,  # AUMENTADO: 3e-4 -> 5e-4 (mais dados = lr maior)
+                buffer_size=1000000,  # DOBRADO: 500k -> 1M (mais dados históricos)
+                learning_starts=25000,  # AUMENTADO: 10k -> 25k (aprende melhor antes de treinar)
+                batch_size=512,  # DOBRADO: 256 -> 512 (aproveita 82k candles)
                 tau=0.005,
                 gamma=0.995,
                 train_freq=1,
@@ -141,17 +163,18 @@ class MultiSymbolTrainer:
         
         # Callbacks
         symbol_clean = symbol.replace('/', '').lower()
-        checkpoint_dir = f'models/checkpoints_{model_name}_{symbol_clean}'
+        # checkpoint_dir = f'models/checkpoints_{model_name}_{symbol_clean}'
         best_model_dir = f'models/best_{model_name}_{symbol_clean}'
         
-        Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        # Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
         Path(best_model_dir).mkdir(parents=True, exist_ok=True)
         
-        checkpoint_cb = CheckpointCallback(
-            save_freq=400000,
-            save_path=checkpoint_dir,
-            name_prefix=f'{model_class.__name__.lower()}_model'
-        )
+        # DESABILITADO: Checkpoints intermediarios consomem muito espaco
+        # checkpoint_cb = CheckpointCallback(
+        #     save_freq=400000,
+        #     save_path=checkpoint_dir,
+        #     name_prefix=f'{model_class.__name__.lower()}_model'
+        # )
         
         # Criar ambiente de validação com Monitor
         eval_env = TradingEnv(
@@ -161,7 +184,11 @@ class MultiSymbolTrainer:
             slippage=env_config.get('slippage', 0.0005),
             leverage=env_config['leverage'],
             position_size=env_config['position_size'],
-            window_size=env_config['window_size']
+            window_size=env_config['window_size'],
+            max_episode_steps=5000,  # Mesmo tamanho do treino
+            random_start=True,
+            persist_balance=False,  # DESABILITADO
+            use_sharpe_reward=True
         )
         eval_env = Monitor(eval_env)  # Wrap com Monitor para métricas corretas
         eval_env = DummyVecEnv([lambda: eval_env])
@@ -180,11 +207,14 @@ class MultiSymbolTrainer:
         print(f"\n⏳ Iniciando treinamento ({timesteps/1e6:.1f}M timesteps)...")
         print(f"Tempo estimado: {timesteps/1e6 * 2:.1f}-{timesteps/1e6 * 3:.1f} horas")
         
+        if continue_training:
+            print(f"[RESUME] Treinamento adicional de {timesteps:,} steps")
+        
         start_time = datetime.now()
         
         model.learn(
             total_timesteps=timesteps,
-            callback=[checkpoint_cb, eval_cb],
+            callback=eval_cb,  # Apenas eval callback (salva o melhor modelo)
             progress_bar=True
         )
         
@@ -452,23 +482,24 @@ def main():
         if sys.argv[1] == 'base':
             # Treinar apenas TD3 base (mais estável que PPO para trading)
             print("Modo: Treinar TD3 BASE (BTC)")
-            print("Duração estimada: 20-30 minutos (200k steps)\n")
-            
-            # Treinar TD3 base
+            print("Dataset: 36 meses (ciclo completo: $19k -> $125k)")
+            print("Duração estimada: 8-9 horas (3M steps)\n")
+            # Treinar TD3 base (1M steps, continuando de 200k)
             print("\n" + "="*70)
-            print("🤖 TREINANDO TD3 BASE")
+            print("[TD3] TREINANDO TD3 BASE")
             print("="*70)
-            print("⚡ TD3 é mais adequado para trading:")
-            print("   - Action space contínuo (melhor para size/timing)")
+            print("[OK] TD3 e mais adequado para trading:")
+            print("   - Action space continuo (melhor para size/timing)")
             print("   - Twin Q-networks (previne overestimation)")
-            print("   - Target policy smoothing (decisões mais estáveis)")
-            print()
+            print("   - Target policy smoothing (decisoes mais estaveis)\n")
             
             trainer.train_base_model(
                 symbol='BTC/USDT',
-                train_data_path='data/train_btcusdt_12m_20260105.csv',
+                train_data_path='data/train_btcusdt_36m_20260109.csv',  # NOVO: 82k candles (36 meses - ciclo completo!)
                 model_class=TD3,
-                timesteps=200000
+                timesteps=3000000,  # AUMENTADO: 3M steps (50% mais dados = mais treinamento)
+                model_name='base',
+                continue_training=True  # Fine-tune do modelo 2M steps com dataset maior
             )
             
             print("\n" + "="*70)

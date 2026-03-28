@@ -26,13 +26,13 @@ class HistoricalDataCollector:
             'options': {'defaultType': 'future'}  # Futures por padrão
         })
         
-        print("✅ CCXT Binance inicializado")
+        print("[OK] CCXT Binance inicializado")
     
     def fetch_ohlcv_historical(
         self,
         symbol: str,
         timeframe: str = '15m',
-        months: int = 12,
+        months: int = 24,  # AUMENTADO: 12 -> 24 meses (2 anos)
         max_candles: int = None
     ) -> pd.DataFrame:
         """
@@ -41,7 +41,7 @@ class HistoricalDataCollector:
         Args:
             symbol: Par de trading (ex: 'BTC/USDT')
             timeframe: Intervalo (1m, 5m, 15m, 1h, 4h, 1d)
-            months: Número de meses para coletar
+            months: Número de meses para coletar (padrão: 24 = 2 anos)
             max_candles: Limite máximo de candles (opcional)
             
         Returns:
@@ -155,7 +155,7 @@ class HistoricalDataCollector:
         Adiciona indicadores técnicos usando TA-Lib.
         Usa mesma configuração do config.yaml para consistência.
         """
-        print("\n🔧 Calculando indicadores técnicos...")
+        print("\n[CALC] Calculando indicadores técnicos...")
         
         df = df.set_index('timestamp')
         df_copy = df.copy()
@@ -203,15 +203,15 @@ class HistoricalDataCollector:
         df_copy.dropna(inplace=True)
         df_copy = df_copy.reset_index()
         
-        print(f"✅ {len(df_copy.columns)} features calculadas")
-        print(f"✅ {len(df_copy):,} candles após limpeza")
+        print(f"[OK] {len(df_copy.columns)} features calculadas")
+        print(f"[OK] {len(df_copy):,} candles após limpeza")
         
         return df_copy
     
     def collect_and_save(
         self,
         symbol: str,
-        months: int = 12,
+        months: int = 24,  # AUMENTADO: 12 -> 24 meses
         split_ratio: float = 0.8
     ) -> tuple:
         """
@@ -219,7 +219,7 @@ class HistoricalDataCollector:
         
         Args:
             symbol: Par de trading
-            months: Meses de histórico
+            months: Meses de histórico (padrão: 24 = 2 anos)
             split_ratio: Proporção train/test (0.8 = 80/20)
             
         Returns:
@@ -243,7 +243,7 @@ class HistoricalDataCollector:
         df_train = df[:split_idx]
         df_test = df[split_idx:]
         
-        print(f"\n📊 Split {int(split_ratio*100)}/{int((1-split_ratio)*100)}:")
+        print(f"\n[SPLIT] {int(split_ratio*100)}/{int((1-split_ratio)*100)}:")
         print(f"  Treino: {len(df_train):,} candles ({len(df_train)/96:.0f} dias)")
         print(f"  Teste: {len(df_test):,} candles ({len(df_test)/96:.0f} dias)")
         
@@ -262,7 +262,7 @@ class HistoricalDataCollector:
         df_test.to_csv(test_path, index=False)
         df.to_csv(full_path, index=False)
         
-        print(f"\n💾 Arquivos salvos:")
+        print(f"\n[SAVE] Arquivos salvos:")
         print(f"  {train_path}")
         print(f"  {test_path}")
         print(f"  {full_path}")
@@ -274,13 +274,13 @@ class HistoricalDataCollector:
         }
 
 
-def collect_multi_symbol(symbols: list, months: int = 12):
+def collect_multi_symbol(symbols: list, months: int = 24):
     """
     Coleta dados históricos para múltiplos símbolos.
     
     Args:
         symbols: Lista de símbolos (ex: ['BTC/USDT', 'ETH/USDT'])
-        months: Meses de histórico para cada
+        months: Meses de histórico para cada (padrão: 24 = 2 anos)
     """
     collector = HistoricalDataCollector()
     
@@ -306,11 +306,11 @@ def collect_multi_symbol(symbols: list, months: int = 12):
                 'paths': paths
             }
             
-            print(f"✅ {symbol} concluído")
+            print(f"[OK] {symbol} concluído")
             
             # Rate limiting entre símbolos
             if i < len(symbols):
-                print("\n⏳ Aguardando 2 segundos...")
+                print("\n[WAIT] Aguardando 2 segundos...")
                 time.sleep(2)
                 
         except Exception as e:
@@ -327,9 +327,9 @@ def collect_multi_symbol(symbols: list, months: int = 12):
     
     for symbol, result in results.items():
         if result['success']:
-            print(f"✅ {symbol}: {result['train_size']:,} train / {result['test_size']:,} test")
+            print(f"[OK] {symbol}: {result['train_size']:,} train / {result['test_size']:,} test")
         else:
-            print(f"❌ {symbol}: {result['error']}")
+            print(f"[ERRO] {symbol}: {result['error']}")
     
     return results
 
@@ -343,24 +343,25 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         # Modo single symbol
         symbol = sys.argv[1]
-        months = int(sys.argv[2]) if len(sys.argv) > 2 else 12
+        months = int(sys.argv[2]) if len(sys.argv) > 2 else 24  # AUMENTADO: 12 -> 24
         
         collector = HistoricalDataCollector()
         collector.collect_and_save(symbol=symbol, months=months)
     
     else:
         # Modo multi-symbol padrão
-        symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
-        months = 12  # 1 ano
+        symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'ADA/USDT']  # +ADA
+        months = 24  # AUMENTADO: 1 ano -> 2 anos (24 meses)
         
-        print("\n🚀 COLETA AUTOMÁTICA MULTI-SYMBOL")
+        print("\n[START] COLETA AUTOMATICA MULTI-SYMBOL")
         print(f"Símbolos: {', '.join(symbols)}")
-        print(f"Período: {months} meses cada")
+        print(f"Período: {months} meses cada (~{months*30} dias)")
+        print(f"Estimativa: ~{months*30*96:,} candles por símbolo (15min)")
         print("\nPressione CTRL+C para cancelar...\n")
         
         time.sleep(3)
         
         results = collect_multi_symbol(symbols, months=months)
         
-        print("\n✅ COLETA COMPLETA!")
+        print("\n[DONE] COLETA COMPLETA!")
         print("Próximo passo: python train_multi_symbol.py")

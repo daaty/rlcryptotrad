@@ -18,9 +18,36 @@ data/*.db
 *.db
 *.sqlite
 
-# Models
+# Models — binários treinados (não versionar)
 models/*.zip
+models/*.pkl
+models/*.pt
+models/*.pth
+models/*.h5
 logs/
+
+# Kline cache — dados de mercado baixados
+kline_cache/
+
+# Tensorboard
+tensorboard/
+
+# Backtest outputs — relatórios e gráficos gerados
+backtest_report_*.txt
+backtest_v16_report_*.txt
+backtest_v18_sweep_*.txt
+backtest_v19_extended_*.txt
+backtest_v19_sweep_*.txt
+backtest_v177_compare_*.txt
+backtest_plot_*.png
+
+# Logs
+*.log
+v18_sweep_*.txt
+v19_*.txt
+
+# Auth / credentials — NUNCA versionar
+auth_config.yaml
 
 # IDE
 .vscode/
